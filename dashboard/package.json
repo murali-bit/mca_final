@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build:extension": "node ../scripts/build-extension-zip.mjs",
+    "build:extension": "test -f ../scripts/build-extension-zip.mjs && node ../scripts/build-extension-zip.mjs || echo Skipping extension build",
     "prebuild": "npm run build:extension",
     "build": "vite build",
     "lint": "oxlint",
