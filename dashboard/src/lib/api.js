@@ -3,7 +3,7 @@
  * Connects the Dashboard to the local Node.js + SQLite backend on http://localhost:4000
  */
 
-const API_BASE = 'http://localhost:4000/api';
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:4000') + '/api';
 
 function getAuthHeader() {
   const token = localStorage.getItem('germin8_auth_token');

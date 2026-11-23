@@ -214,7 +214,7 @@ export default function LoginPage() {
 
         {/* Bottom Proof Line */}
         <div className="relative z-10 flex items-center justify-between pt-6 border-t border-white/10 text-xs text-slate-400">
-          <span>Backend: http://localhost:4000</span>
+          <span>Backend: {import.meta.env.VITE_API_URL || 'http://localhost:4000'}</span>
           <span className="text-emerald-400 font-medium">● SQLite DB Connected</span>
         </div>
       </div>
