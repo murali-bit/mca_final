@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Germin8</title>
+  <link rel="stylesheet" href="css/tokens.css" />
+  <link rel="stylesheet" href="css/icons.css" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+
+<body>
+  <div class="app">
+    <header class="app-hdr glass">
+      <div class="hdr-bar">
+        <span class="brand-mark has-ico i-logo" aria-hidden="true"></span>
+        <div class="brand-text">
+          <h1>Germin8</h1>
+          <small><span id="ctxFirm">MCA Auto Filler</span><span class="sep" aria-hidden="true"></span><span id="ctxForm">AOC-4</span></small>
+        </div>
+        <span class="conn-chip" id="mcaChip" data-state="off" title="Whether an MCA page is open in this browser window">
+          <span class="dot" aria-hidden="true"></span><span id="mcaChipText">No MCA tab</span>
+        </span>
+      </div>
+      <!-- Status notice: one inline message at a time (see js/ui/toasts.js). Stays before the script tags. -->
+      <div id="notice" class="notice glass hidden" role="status" aria-live="polite" data-level="info">
+        <span class="notice-ico" aria-hidden="true"></span>
+        <div class="notice-body">
+          <div class="notice-title"></div>
+          <div class="notice-text hidden"></div>
+        </div>
+        <button class="notice-action small hidden"></button>
+        <button class="notice-close has-ico i-x" aria-label="Dismiss"></button>
+      </div>
+    </header>
+
+    <main class="app-body">
+
+      <!-- Critical error panel (hidden until a critical error fires). -->
+      <div id="errorPanel" class="err-panel hidden" role="alert" aria-live="assertive">
+        <span class="err-ico has-ico i-alert" aria-hidden="true"></span>
+        <div class="err-main">
+          <div class="err-panel-row">
+            <span class="err-title" id="errTitle">Something went wrong</span>
+            <span class="err-code" id="errCode">ERR_UNKNOWN</span>
+            <button class="err-close has-ico i-x" id="errClose" aria-label="Dismiss"></button>
+          </div>
+          <p class="err-body" id="errBody"></p>
+          <ol class="err-remedy" id="errRemedy"></ol>
+          <div class="err-actions">
+            <button id="errRetry" class="primary small has-ico i-refresh hidden">Retry step</button>
+            <button id="errReport" class="small has-ico i-copy">Copy report</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Form + client selection -->
+      <section class="card selector-card">
+        <div class="field">
+          <label for="formSelect">Form</label>
+          <div class="select-wrap">
+            <span class="select-ico" id="formSelectIco" aria-hidden="true"></span>
+            <select id="formSelect"></select>
+          </div>
+          <small class="hint" id="formDesc"></small>
+        </div>
+
+        <div class="field">
+          <label for="clientSelect">Client data</label>
+          <div class="select-wrap">
+            <span class="select-ico has-ico i-user" aria-hidden="true"></span>
+            <select id="clientSelect"><option value="">&mdash; choose a client &mdash;</option></select>
+          </div>
+          <div class="row">
+            <button id="importClientBtn" class="small ghost has-ico i-upload" title="Load a client JSON prepared in the Germin8 dashboard">Import JSON</button>
+            <button id="removeClientBtn" class="small ghost danger has-ico i-trash hidden">Remove imported</button>
+            <input type="file" id="importClientInput" accept="application/json,.json" hidden />
+          </div>
+        </div>
+      </section>
+
+      <!-- Loaded client / data card. -->
+      <section class="card data-card" id="loadedDataCard">
+        <div class="data-empty hidden" id="dataEmpty">
+          <span class="data-empty-ico has-ico i-inbox" aria-hidden="true"></span>
+          <div>
+            <strong>No client loaded</strong>
+            <p>Pick one from the dropdown above, import a JSON file, or send it from the Germin8 dashboard. The dashboard pairing key lives in the Connection card at the bottom of this panel.</p>
+          </div>
+        </div>
+        <div class="data-loaded hidden" id="dataLoaded">
+          <header class="data-head">
+            <h3 id="ciName">&mdash;</h3>
+            <span class="src-badge" id="ciSourceBadge" data-src="bundled">Bundled</span>
+          </header>
+          <div class="data-meta">
+            <span><em>CIN</em> <code id="ciCin">&mdash;</code></span>
+            <span><em>FY</em> <code id="ciFy">&mdash;</code></span>
+          </div>
+          <div class="prefill" title="Fields present in the client data vs. total expected for this form">
+            <div class="prefill-meta">
+              <span>Data readiness</span>
+              <span class="prefill-text" id="prefillText">0 / 0 fields ready (0%)</span>
+            </div>
+            <div class="prefill-bar"><div class="prefill-fill" id="prefillFill" style="width:0%"></div></div>
+          </div>
+          <details class="data-breakdown">
+            <summary class="has-ico i-chevron">Per-section breakdown</summary>
+            <ul class="sect-list" id="sectList"></ul>
+          </details>
+          <div class="data-actions">
+            <button id="editBtn" class="small has-ico i-pencil">Edit</button>
+            <button id="clearBtn" class="small has-ico i-trash">Clear</button>
+            <button id="reimportBtn" class="small has-ico i-refresh">Reimport</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== AOC-4 (default): Client / PDF / Preview workflow ========== -->
+      <div id="aoc4Workflow" class="form-workflow">
+        <nav class="tabs" role="tablist">
+          <button class="tab has-ico i-play active" data-tab="main" role="tab" aria-selected="true" aria-controls="tab-main">Fill</button>
+          <button class="tab has-ico i-file" data-tab="pdf" role="tab" aria-selected="false" aria-controls="tab-pdf">PDF</button>
+          <button class="tab has-ico i-eye" data-tab="preview" role="tab" aria-selected="false" aria-controls="tab-preview">Preview</button>
+        </nav>
+
+        <div class="status">
+          <div id="progressWrap" class="progress hidden">
+            <div class="progress-fill" id="progressFill"></div>
+            <span class="progress-text" id="progressText">0 / 0</span>
+          </div>
+          <div id="message" class="msg hidden"></div>
+        </div>
+
+        <section id="tab-main" class="panel active" role="tabpanel">
+          <div class="field">
+            <label for="phaseSelect">Fill workflow</label>
+            <select id="phaseSelect"></select>
+          </div>
+
+          <div class="field opts">
+            <label><input type="checkbox" id="autoSubmit" checked /> Click each section&rsquo;s Save and continue</label>
+            <label><input type="checkbox" id="showPreview" /> Show preview before fill</label>
+          </div>
+
+          <div class="actions">
+            <button id="loadBtn" class="primary has-ico i-play">Load &amp; Fill All Phases</button>
+            <button id="fillBtn" class="has-ico i-file" disabled>Fill Form</button>
+          </div>
+        </section>
+
+        <section id="tab-pdf" class="panel" role="tabpanel">
+          <div class="field">
+            <label for="pdfInput">Upload PDF (optional, &le;10MB)</label>
+            <input type="file" id="pdfInput" accept="application/pdf" />
+            <small class="hint">Use only for ad-hoc clients. Known clients come from the Client dropdown.</small>
+          </div>
+          <div class="actions">
+            <button id="extractBtn" class="primary has-ico i-file">Extract PDF Text</button>
+          </div>
+          <pre id="pdfRaw" class="codeview"></pre>
+        </section>
+
+        <section id="tab-preview" class="panel" role="tabpanel">
+          <h3 id="previewTitle">Values to be filled</h3>
+          <ul id="fieldList" class="field-list"></ul>
+          <div class="actions">
+            <button id="confirmBtn" class="primary has-ico i-play">Confirm &amp; Fill</button>
+            <button id="cancelBtn" class="has-ico i-x">Cancel</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- ========== Simplified multi-form data entry ========== -->
+      <div id="aoc4OfflineWorkflow" class="form-workflow hidden">
+        <section class="panel active">
+          <div class="field">
+            <label for="aoc4OffFormData">AOC-4 Offline form data</label>
+            <textarea id="aoc4OffFormData" rows="9" placeholder='{"cin": "U...", "financialYearFrom": "01/04/2025", "financialYearTo": "31/03/2026", ...}'></textarea>
+            <small class="hint shared-hint">JSON, or send it from the Germin8 dashboard.</small>
+          </div>
+          <div class="actions">
+            <button id="aoc4OffFillBtn" class="primary has-ico i-play">Fill AOC-4 Offline</button>
+            <button id="aoc4OffScanBtn" class="has-ico i-search">Check fields</button>
+          </div>
+          <ul class="ex-list" id="offResult"></ul>
+        </section>
+      </div>
+
+      <div id="spiceAWorkflow" class="form-workflow hidden">
+        <section class="panel active">
+          <div class="field">
+            <label for="spiceAFormData">SPICe+ Part A data</label>
+            <textarea id="spiceAFormData" rows="9" placeholder='{"proposedName1": "...", "Company type": "Company", "NIC code": "..."}'></textarea>
+            <small class="hint shared-hint">JSON, or send it from the Germin8 dashboard.</small>
+          </div>
+          <div class="actions">
+            <button id="spiceAFillBtn" class="primary has-ico i-play">Fill SPICe+ Part A</button>
+            <button id="spiceAScanBtn" class="has-ico i-search">Check fields</button>
+          </div>
+        </section>
+      </div>
+
+      <div id="inc32Workflow" class="form-workflow hidden">
+        <section class="panel active">
+          <div class="field">
+            <label for="inc32FormData">INC-32 (SPICe+ Part B) data</label>
+            <textarea id="inc32FormData" rows="9" placeholder='{"proposedName1": "...", "Company type": "Company", "NIC code": "..."}'></textarea>
+            <small class="hint shared-hint">JSON, or send it from the Germin8 dashboard.</small>
+          </div>
+          <div class="actions">
+            <button id="inc32FillBtn" class="primary has-ico i-play">Fill INC-32</button>
+            <button id="inc32ScanBtn" class="has-ico i-search">Check fields</button>
+          </div>
+        </section>
+      </div>
+
+      <div id="dir3Workflow" class="form-workflow hidden">
+        <section class="panel active">
+          <div class="field">
+            <label for="dir3FormData">DIR-3 KYC data</label>
+            <textarea id="dir3FormData" rows="9" placeholder='{"din": "...", "pan": "...", "mobile": "...", "email": "..."}'></textarea>
+            <small class="hint shared-hint">JSON, or send it from the Germin8 dashboard. OTP steps stay manual.</small>
+          </div>
+          <div class="actions">
+            <button id="dir3FillBtn" class="primary has-ico i-play">Fill DIR-3 KYC</button>
+            <button id="dir3ScanBtn" class="has-ico i-search">Check fields</button>
+          </div>
+        </section>
+      </div>
+
+      <div id="mgt7Workflow" class="form-workflow hidden">
+        <section class="panel active">
+          <div class="field">
+            <label for="mgt7FormData">MGT-7 data (beta)</label>
+            <textarea id="mgt7FormData" rows="9" placeholder='{"cin": "U...", "finYearFrom": "01/04/2025", "finYearTo": "31/03/2026", "agmHeld": "Yes", ...}'></textarea>
+            <small class="hint shared-hint">JSON, or send it from the Germin8 dashboard. Covers every section of the form. Open each step and click Fill again &mdash; fields on a step that isn&rsquo;t open are skipped, and fields MCA has locked are left alone. Repeating tables (directors, RTA, business activities and similar) get their first row only; attachments are not uploaded.</small>
+          </div>
+          <div class="actions">
+            <button id="mgt7CheckBtn" class="has-ico i-search">Pre-filing check</button>
+            <button id="mgt7FillBtn" class="primary has-ico i-play">Fill MGT-7 (this step)</button>
+            <button id="mgt7StopBtn" class="danger has-ico i-stop hidden">Stop</button>
+            <button id="mgt7ScanBtn" class="has-ico i-search">Check fields</button>
+          </div>
+          <ul class="ex-list" id="mgt7Result"></ul>
+        </section>
+      </div>
+
+      <div id="adt1Workflow" class="form-workflow hidden">
+        <section class="panel active">
+          <div class="field">
+            <label for="adt1FormData">ADT-1 data (beta)</label>
+            <textarea id="adt1FormData" rows="9" placeholder='{"cin": "U...", "dateOfAppointment": "...", "firmName": "...", "periodFrom": "01/04/2025", ...}'></textarea>
+            <small class="hint shared-hint">JSON, or send it from the Germin8 dashboard (it appears here by itself). <b>Start</b> does everything: opens MCA if needed, waits while you sign in yourself (ID, password, captcha, OTP), opens Form ADT-1, then runs Phase 1 and Phase 2. The attachment and declaration steps are yours. <b>Fill current step</b> only works on the step already open: on <i>Company Information</i> it puts in the <code>cin</code>, waits for MCA to autofill the company details, then clicks Next; on <i>Appointment and Auditor Details</i> it fills the appointment and auditor fields, then clicks Next (MCA validates on Next; Save is not used) and stops on the attachments step. Five unlabelled Yes/No questions on the Appointment step are not filled; answer those on MCA yourself (they are listed after the run). The Declaration step is not automated yet.</small>
+          </div>
+          <div class="actions">
+            <button id="adt1StartBtn" class="primary has-ico i-play">Start ADT-1</button>
+            <button id="adt1StopBtn" class="danger has-ico i-stop hidden">Stop</button>
+            <button id="adt1FillBtn" class="has-ico i-play">Fill current step</button>
+            <button id="adt1ScanBtn" class="has-ico i-search">Check fields</button>
+          </div>
+          <div class="field" id="adt1Attach">
+            <label>Attachments (PDF, up to 2 MB each)</label>
+            <div style="display:grid;gap:6px;margin-top:4px">
+              <div><small>(a) Intimation: the appointment letter to the auditor</small><br><input type="file" id="adt1FileIntimation" accept="application/pdf,.pdf" /> <small class="hint" id="adt1FileIntimationName"></small></div>
+              <div><small>(b) Written consent given by the auditor</small><br><input type="file" id="adt1FileConsent" accept="application/pdf,.pdf" /> <small class="hint" id="adt1FileConsentName"></small></div>
+              <div><small>(e) Optional: the board resolution</small><br><input type="file" id="adt1FileOptional" accept="application/pdf,.pdf" /> <small class="hint" id="adt1FileOptionalName"></small></div>
+            </div>
+            <div class="actions" style="margin-top:8px">
+              <button id="adt1AttachBtn" class="has-ico i-play">Upload attachments + fill declaration</button>
+            </div>
+            <small class="hint shared-hint">Choose the PDFs once; they are kept in the extension. When the form reaches the <i>Attachments</i> step, <b>Fill current step</b> (or this button) uploads them into MCA's three boxes, presses each Upload, and fills the declaration (resolution number, date, designation, DIN) from the data above. If you used <b>Start</b> and chose files first, it does this by itself after the Appointment step. Next, Save and the digital signature stay with you.</small>
+          </div>
+          <ul class="ex-list" id="adt1Result"></ul>
+        </section>
+      </div>
+
+      <div id="cancelSrnWorkflow" class="form-workflow hidden">
+        <section class="panel active">
+          <div class="field">
+            <label>Cancel pending SRNs (My Application &rarr; Pending for Action)</label>
+            <small class="hint shared-hint">Removes the draft SRNs left behind by testing. Only rows with status <b>Draft/Pending Submission</b> are touched. For each one the extension presses <b>Cancel SRN</b>, then <b>Yes</b> on MCA's "confirm cancel" popup, waits for MCA to reload, opens <i>My Application</i> again and repeats. <b>Cancelled SRNs cannot be restored.</b> Stay signed in to MCA and leave that tab alone while it runs.</small>
+          </div>
+          <div class="field">
+            <label for="srnFilter">Only cancel rows containing (optional)</label>
+            <input type="text" id="srnFilter" placeholder="e.g. AOC-4, a company name or CIN" />
+          </div>
+          <div class="field">
+            <label for="srnMax">Stop after this many (0 = all)</label>
+            <input type="number" id="srnMax" min="0" value="0" />
+          </div>
+          <div class="field">
+            <label style="display:flex;gap:6px;align-items:flex-start"><input type="checkbox" id="srnConfirm" /> <span>I understand that cancelled SRNs cannot be restored.</span></label>
+          </div>
+          <div class="actions">
+            <button id="srnScanBtn" class="has-ico i-search">Scan (cancels nothing)</button>
+            <button id="srnRunBtn" class="danger has-ico i-trash">Cancel all pending drafts</button>
+            <button id="srnStopBtn" class="has-ico i-stop hidden">Stop</button>
+          </div>
+          <small class="hint" id="srnSummary"></small>
+          <ul class="ex-list" id="srnResult"></ul>
+        </section>
+      </div>
+
+      <!-- Run status: the AOC-4 Offline fill in progress (or the last one), kept even if this panel was closed. -->
+      <section class="card run-card hidden" id="runCard" aria-live="polite">
+        <header class="run-head">
+          <div class="run-title"><strong>AOC-4 Offline fill</strong><small id="runCurrent"></small></div>
+          <span class="run-chip" id="runChip" data-state="running">Running</span>
+        </header>
+        <div class="prefill-bar"><div class="prefill-fill" id="runFill" style="width:0%"></div></div>
+        <div class="run-meta"><span id="runCount">0 / 0 steps</span><span id="runElapsed">00:00</span></div>
+        <div class="run-summary" id="runSummary"></div>
+        <div class="row">
+          <button id="runStopBtn" class="small danger has-ico i-x">Stop</button>
+          <button id="runDismissBtn" class="small has-ico i-trash hidden">Dismiss</button>
+        </div>
+        <details class="data-breakdown" id="runDetails" open>
+          <summary class="has-ico i-chevron">Field details</summary>
+          <ul class="ex-list" id="runList"></ul>
+        </details>
+      </section>
+
+      <!-- ========== Live process timeline ========== -->
+      <section class="card timeline-wrap" id="timelineWrap">
+        <header class="tl-head">
+          <h3 class="has-ico i-activity">Live progress</h3>
+          <span class="tl-clock" id="tlClock">00:00</span>
+        </header>
+        <ol class="timeline" id="timeline" aria-live="polite"></ol>
+      </section>
+
+      <!-- Page field extractor: lists what is on the open MCA page so a field map can be built from it. -->
+      <details class="card extract-card" id="extractCard">
+        <summary class="has-ico i-search">Extract page fields</summary>
+        <p class="hint">Reads every input, dropdown and radio on the open MCA page, plus every field in later or locked sections you have not opened yet (pulled from the form's own data model, so earlier steps need not be filled first). Search the list, then copy or download it as JSON.</p>
+        <div class="row">
+          <button id="exRunBtn" class="primary small has-ico i-search">Extract fields</button>
+          <button id="exCopyBtn" class="small has-ico i-copy" disabled>Copy JSON</button>
+          <button id="exDownloadBtn" class="small has-ico i-download" disabled>Download</button>
+        </div>
+        <input type="text" id="exSearch" placeholder="Search label, name, option" disabled />
+        <small class="hint" id="exMeta"></small>
+        <ul class="ex-list" id="exList"></ul>
+      </details>
+
+      <!-- Dev-only page probe (Phase 0): what the open MCA page is built with. Hidden unless the
+           extension is loaded unpacked (see js/ui/page-probe.js). Read-only. -->
+      <details class="card extract-card hidden" id="probeCard">
+        <summary class="has-ico i-search">Probe page (dev)</summary>
+        <p class="hint">Checks the MCA tab you already have open: <code>window.guideBridge</code>, Angular, how fields are identified, and whether they sit in iframes or shadow roots. Changes nothing on the page.</p>
+        <div class="row">
+          <button id="probeRunBtn" class="primary small has-ico i-search">Probe page</button>
+          <button id="probeCopyBtn" class="small has-ico i-copy" disabled>Copy JSON</button>
+        </div>
+        <small class="hint" id="probeMeta"></small>
+        <ul class="ex-list" id="probeList"></ul>
+      </details>
+
+      <!-- Pairing key: a shared secret with the Germin8 dashboard. Generate it in the dashboard
+           (Settings, Extension, Pairing key) and paste the same value here. Without it, this
+           extension accepts a client from any page on localhost, not just that dashboard. -->
+      <p class="section-label">Connection</p>
+      <section class="card account-card" id="acctCard">
+        <div class="field">
+          <label for="acctKeyInput">Dashboard pairing key <span class="hint" id="acctKeyStatus" data-state="warn">Not set</span></label>
+          <div class="row">
+            <input type="text" id="acctKeyInput" class="grow" placeholder="Paste the key generated in Germin8 under Settings, Extension" />
+            <button id="acctSaveBtn" class="primary small has-ico i-check">Save</button>
+          </div>
+          <small class="hint">Generated in the dashboard, not here. Optional, but without it any page on <code>localhost</code> can send this extension a client.</small>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Libraries + feature modules. Field maps and the registry must load before
+       pills.js consumes them. The AOC-4 flow modules (storage, field-mapper,
+       phase-runner, etc.) are unchanged. -->
+  <script src="libs/pdf.min.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/field-maps/_shared.js"></script>
+  <script src="js/field-maps/aoc4.js"></script>
+  <script src="js/field-maps/aoc4-offline.js"></script>
+  <script src="js/field-maps/spice-a.js"></script>
+  <script src="js/field-maps/inc32.js"></script>
+  <script src="js/field-maps/dir3.js"></script>
+  <script src="js/field-maps/mgt7.js"></script>
+  <script src="js/field-maps/adt1.js"></script>
+  <script src="js/forms-registry.js"></script>
+  <script src="js/filler.js"></script>
+  <script src="js/field-mapper.js"></script>
+  <script src="js/validator.js"></script>
+  <script src="js/mgt7-checks.js"></script>
+  <script src="js/aoc4-checks.js"></script>
+  <script src="js/pdf-extractor.js"></script>
+  <script src="js/page-automation.js"></script>
+  <script src="js/phase-runner.js"></script>
+  <script src="js/offline-engine.js"></script>
+  <script src="js/adt1-engine.js"></script>
+  <script src="js/adt1-flow.js"></script>
+  <script src="js/srn-cleanup.js"></script>
+  <script src="js/ui/toasts.js"></script>
+  <script src="js/ui/timeline.js"></script>
+  <script src="js/ui/error-panel.js"></script>
+  <script src="js/ui/data-card.js"></script>
+  <script src="js/ui/form-picker.js"></script>
+  <script src="js/ui/field-extractor.js"></script>
+  <script src="js/ui/run-status.js"></script>
+  <script src="js/ui/page-probe.js"></script>
+  <script src="js/error-handler.js"></script>
+  <script src="popup.js"></script>
+</body>
+
+</html>

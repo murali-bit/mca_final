@@ -1,0 +1,13 @@
+{
+  "name": "germin8-backend",
+  "version": "1.0.0",
+  "description": "Germin8 MCA Real Backend with SQLite, OTP Auth & Payment Verification",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node seed.js"
+  },
+  "dependencies": {}
+}
+

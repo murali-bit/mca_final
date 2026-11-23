@@ -1,0 +1,62 @@
+/* MIRROR: keep byte-identical with dashboard/css/tokens.css; dashboard/test/mirror.test.js enforces it */
+/* --accent is used ONLY for focus rings, links and the connected/current marker. Never as a fill. Primary buttons are ink (#111). */
+:root {
+  color-scheme: light;
+  /* surfaces */
+  --bg: #ffffff; --surface: #ffffff; --surface-2: #fafafa; --surface-3: #f4f4f4;
+  --border: #e6e6e6; --border-strong: #d4d4d4; --hairline: 1px solid var(--border);
+  /* ink */
+  --text: #111111; --text-2: #525252; --text-3: #8a8a8a; --text-inverse: #ffffff;
+  /* extension aliases (styles.css + js inline var() uses keep working) */
+  --fg: var(--text); --fg-2: var(--text-2); --muted: var(--text-3); --faint: #b5b5b5; --page: var(--bg);
+  /* one brand accent, small */
+  --accent: #1a56db; --accent-strong: #1443b0; --accent-hover: var(--accent-strong);
+  --accent-soft: #eef3fe; --accent-mid: #c9d8fb; --accent-border: #c9d8fb; --accent-ring: rgba(26, 86, 219, .22);
+  /* status: text + dot only */
+  --ok: #15803d; --ok-soft: #f1faf4; --ok-border: #cfe9d8; --ok-strong: var(--ok);
+  --warn: #b45309; --warn-soft: #fdf8ee; --warn-border: #f1e0b6; --warn-strong: var(--warn);
+  --err: #c81e1e; --err-soft: #fdf2f2; --err-border: #f3c6c6; --err-strong: var(--err);
+  --ai: var(--text-2); --ai-soft: var(--surface-2); --ai-border: var(--border);
+  --info: var(--accent); --info-soft: var(--accent-soft);
+  /* primary button is ink */
+  --btn-bg: #111111; --btn-bg-hover: #2a2a2a; --btn-fg: #ffffff;
+  /* glass */
+  --glass-bg: rgba(255, 255, 255, .72); --glass-blur: blur(12px) saturate(140%); --glass-edge: 1px solid rgba(17, 17, 17, .08);
+  /* type: system stack, 5 sizes, 3 weights */
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", monospace;
+  --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 15px; --fs-xl: 20px;
+  --lh: 1.5; --lh-tight: 1.25; --tracking-caps: .06em; --tracking-title: -.02em;
+  --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600;
+  /* spacing 4px scale */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
+  /* radii: three + pill */
+  --radius-sm: 4px; --radius: 6px; --radius-lg: 10px; --radius-pill: 999px; --radius-xs: var(--radius-sm);
+  /* shadows: two */
+  --shadow-sm: 0 1px 0 rgba(17, 17, 17, .04); --shadow-lg: 0 16px 40px rgba(17, 17, 17, .10); --shadow-md: var(--shadow-sm);
+  /* motion */
+  --ease: cubic-bezier(.2, .7, .2, 1); --dur: 140ms;
+  /* icons */
+  --ico-size: 16px;
+  /* layout dashboard */
+  --sidebar: 248px; --topbar: 64px; --rail: 280px; --content-max: 1280px;
+  /* layout extension */
+  --panel-gutter: 16px; --panel-max: 760px;
+  /* kept component tokens */
+  --avatar-size: 28px; --avatar-bg: var(--surface-3); --avatar-text: var(--text-2); --avatar-ring-self: var(--border-strong);
+  --role-edge-system: var(--text); --role-edge-custom: var(--border-strong);
+  --empty-icon-size: 20px; --empty-pad-y: 40px;
+  --auth-split-width: 0px; --auth-motif-w: 0px; --auth-motif-h: 0px;
+}
+@media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; } }
+/* glass = background + blur only; each component draws its own hairline edge */
+.glass { background: var(--glass-bg); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
+@supports not (backdrop-filter: blur(1px)) { .glass { background: #ffffff; } }
+@media (prefers-reduced-transparency: reduce) { .glass { background: #ffffff; -webkit-backdrop-filter: none; backdrop-filter: none; } }
+.tnum { font-variant-numeric: tabular-nums; }
+@media print {
+  .sidebar, .topbar, .footbar, .rail, .section-bar, .overlay, .toast { display: none !important; }
+  .content { padding: 0; }
+  pre.json, .scroll-x, .msg { max-height: none; overflow: visible; }
+  .card.collapsed .card-body { display: block; }
+}

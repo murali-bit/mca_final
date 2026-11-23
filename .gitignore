@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+
+# Environment files (contain secrets)
+.env
+*.local
+
+# Database
+backend/data/*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Extension build artifacts
+extension/*.crx
+extension/*.pem
+extension/*.zip
+
+# Temp
+*.tmp
