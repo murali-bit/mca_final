@@ -54,7 +54,105 @@ document.addEventListener('DOMContentLoaded', async () => {
   ps.addEventListener('change', () => { if (currentData) displayFieldList(currentData); });
   await loadClientsIndex();
   bindDashboardSync();
+  bindJobInbox();
 });
+
+/* ---------- Jobs pushed from the dashboard (backend queue) ---------- */
+// background.js owns the queue (alarm every 30s + badge); while this panel is open it asks
+// every few seconds so a push from the dashboard shows up almost immediately.
+const JOB_POLL_MS = 5000;
+
+function bindJobInbox() {
+  const list = document.getElementById('jobsList');
+  if (!list) return;
+  const refresh = () => chrome.storage.local.get(['pendingJobs', 'jobsStatus'])
+    .then(r => renderJobs(r.pendingJobs || [], r.jobsStatus));
+  refresh();
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && (changes.pendingJobs || changes.jobsStatus)) refresh();
+  });
+  const poll = () => chrome.runtime.sendMessage({ action: 'POLL_JOBS' }).catch(() => {});
+  poll();
+  setInterval(poll, JOB_POLL_MS);
+  list.addEventListener('click', e => {
+    const btn = e.target.closest('button[data-job]');
+    if (!btn) return;
+    if (btn.dataset.act === 'load') loadPushedJob(btn.dataset.job, btn);
+    else dismissPushedJob(btn.dataset.job, btn);
+  });
+}
+
+// Backend timestamps are SQLite CURRENT_TIMESTAMP: UTC "YYYY-MM-DD HH:MM:SS".
+function jobAge(ts) {
+  const t = Date.parse(String(ts || '').replace(' ', 'T') + 'Z');
+  if (!t) return '';
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
+}
+
+function renderJobs(jobs, status) {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const list = document.getElementById('jobsList');
+  list.innerHTML = jobs.map(j => `
+    <li class="job-item">
+      <div class="job-main">
+        <span class="job-name" title="${esc(j.clientName || j.clientId)}">${esc(j.clientName || j.clientId || 'Untitled')}</span>
+        <span class="job-sub"><span class="job-form">${esc(FORM_LABEL[j.formType] || j.formType)}</span> · ${esc(jobAge(j.createdAt))}</span>
+      </div>
+      <button class="small primary" data-act="load" data-job="${esc(j.id)}">Load</button>
+      <button class="small ghost" data-act="dismiss" data-job="${esc(j.id)}" title="Remove this job from the queue">Dismiss</button>
+    </li>`).join('');
+
+  const count = document.getElementById('jobsCount');
+  count.textContent = String(jobs.length);
+  count.classList.toggle('hidden', !jobs.length);
+
+  const st = document.getElementById('jobsStatus');
+  const offline = status && status.ok === false;
+  st.textContent = !status ? 'Checking…' : offline ? 'Backend offline' : 'Connected';
+  st.classList.toggle('ok', !!(status && status.ok));
+  st.classList.toggle('bad', !!offline);
+
+  const empty = document.getElementById('jobsEmpty');
+  empty.textContent = offline
+    ? 'Dashboard backend not reachable at localhost:4000. Start it with: node backend/server.js'
+    : 'No jobs waiting. Scan and review a document in the dashboard, then click Push to Extension.';
+  empty.classList.toggle('hidden', jobs.length > 0);
+}
+
+async function loadPushedJob(jobId, btn) {
+  if (fillInProgress || clientLoadInProgress) return showMessage('error', 'Wait for the current fill to finish before loading another job.');
+  btn.disabled = true;
+  try {
+    const res = await chrome.runtime.sendMessage({ action: 'LOAD_JOB', jobId });
+    if (!res || !res.ok) throw new Error((res && res.error) || 'No response from the extension');
+    importedClients = (await Storage.get('importedClients')) || {};
+    if (window.FormPicker) await window.FormPicker.pick(res.formType);
+    activeForm = res.formType;
+    rebuildClientSelect(res.id);
+    if (res.formType === 'aoc4') {
+      document.getElementById('phaseSelect').value = '1';
+      await onLoadClient(false);
+    } else {
+      await loadFormClient(res.formType, res.id);
+    }
+  } catch (err) {
+    btn.disabled = false;
+    showMessage('error', `Could not load the job: ${err.message}`, 10000);
+  }
+}
+
+async function dismissPushedJob(jobId, btn) {
+  btn.disabled = true;
+  const res = await chrome.runtime.sendMessage({ action: 'DISMISS_JOB', jobId }).catch(e => ({ ok: false, error: e.message }));
+  if (!res || !res.ok) {
+    btn.disabled = false;
+    showMessage('error', `Could not dismiss the job: ${(res && res.error) || 'no response'}`, 8000);
+  }
+}
 
 async function initChrome() {
   try {
@@ -151,8 +249,9 @@ let importedClients = {};
 async function loadClientsIndex() {
   try {
     const url = chrome.runtime.getURL('clients/index.json');
-    const res = await fetch(url);
-    clientsIndex = await res.json();
+    // clients/ is local-only (gitignored); a fresh copy has no index, which just means no bundled clients.
+    const res = await fetch(url).catch(() => null);
+    clientsIndex = res && res.ok ? await res.json() : { firm: 'Germin8', clients: [] };
     // "Germin8 Advisors / Jain S A K & Co." is too long for the header line: show the first name only.
     if (clientsIndex.firm) document.getElementById('ctxFirm').textContent = clientsIndex.firm.split(' / ')[0];
     importedClients = (await Storage.get('importedClients')) || {};
@@ -1316,3 +1415,116 @@ function displayFieldList(data) {
 function escape(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+// ───────── Fix Panel — smart error recovery ─────────
+// When MCA validation rejects a Save, the phase-runner dispatches a 'germin8:fixNeeded' event.
+// This panel shows the error and input boxes for each bad field, then re-fills and retries.
+const FixPanel = (() => {
+  let _resolve = null;
+  let _phaseId = null;
+  let _tabId = null;
+
+  function bind() {
+    const closeBtn = document.getElementById('fixClose');
+    const applyBtn = document.getElementById('fixApply');
+    const skipBtn  = document.getElementById('fixSkip');
+    if (closeBtn) closeBtn.addEventListener('click', dismiss);
+    if (skipBtn)  skipBtn.addEventListener('click', skip);
+    if (applyBtn) applyBtn.addEventListener('click', apply);
+    window.addEventListener('germin8:fixNeeded', e => show(e.detail));
+  }
+
+  function parseErrors(validationErrors) {
+    const fields = [];
+    for (const raw of validationErrors) {
+      const text = raw.replace(/^MCA said:\s*/i, '');
+      const entry = { raw: text, label: '', hint: '', key: '' };
+      // Try to extract field name from common MCA patterns:
+      // "Please enter valid value for <field>" / "Please enter <field>" / "<field> is required"
+      const m = text.match(/(?:enter\s+(?:valid\s+)?(?:value\s+)?(?:for\s+)?|fill\s+)["']?(.+?)["']?\s*$/i)
+             || text.match(/^["']?(.+?)["']?\s+is\s+(?:required|mandatory|invalid)/i)
+             || text.match(/(?:invalid|incorrect)\s+(?:value\s+)?(?:in|for)\s+["']?(.+?)["']?\s*$/i);
+      if (m) {
+        entry.label = m[1].replace(/[.!]+$/, '').trim();
+        entry.key = entry.label.toLowerCase().replace(/\s+/g, '_');
+      } else {
+        entry.label = text.length > 60 ? text.slice(0, 57) + '...' : text;
+        entry.key = 'field_' + fields.length;
+      }
+      entry.hint = text;
+      fields.push(entry);
+    }
+    return fields;
+  }
+
+  function show({ validationErrors, phaseId, tabId }) {
+    _phaseId = phaseId;
+    _tabId = tabId;
+    const panel   = document.getElementById('fixPanel');
+    const explain = document.getElementById('fixExplain');
+    const container = document.getElementById('fixFields');
+    if (!panel || !container) return;
+
+    const fields = parseErrors(validationErrors || []);
+    explain.textContent = fields.length === 1
+      ? 'MCA rejected one field. Enter the correct value below.'
+      : `MCA rejected ${fields.length} field(s). Fix them below and click "Fix & Continue".`;
+
+    container.innerHTML = '';
+    for (const f of fields) {
+      const div = document.createElement('div');
+      div.className = 'fix-field';
+      div.innerHTML = `
+        <label>${escape(f.label)}</label>
+        <input type="text" data-fix-key="${escape(f.key)}" placeholder="Enter correct value" />
+        <p class="fix-hint">${escape(f.hint)}</p>`;
+      container.appendChild(div);
+    }
+    panel.classList.remove('hidden');
+    const first = container.querySelector('input');
+    if (first) first.focus();
+
+    return new Promise(resolve => { _resolve = resolve; });
+  }
+
+  function collectValues() {
+    const inputs = document.querySelectorAll('#fixFields input[data-fix-key]');
+    const vals = {};
+    for (const inp of inputs) {
+      const v = inp.value.trim();
+      if (v) vals[inp.dataset.fixKey] = v;
+    }
+    return vals;
+  }
+
+  async function apply() {
+    const vals = collectValues();
+    if (!Object.keys(vals).length) {
+      if (window.Toasts) window.Toasts.warning({ title: 'Enter at least one value' });
+      return;
+    }
+    hide();
+    if (_resolve) { _resolve({ action: 'fix', values: vals, phaseId: _phaseId, tabId: _tabId }); _resolve = null; }
+  }
+
+  function skip() {
+    hide();
+    if (_resolve) { _resolve({ action: 'skip', phaseId: _phaseId }); _resolve = null; }
+  }
+
+  function dismiss() {
+    hide();
+    if (_resolve) { _resolve({ action: 'dismiss', phaseId: _phaseId }); _resolve = null; }
+  }
+
+  function hide() {
+    const panel = document.getElementById('fixPanel');
+    if (panel) panel.classList.add('hidden');
+  }
+
+  return { bind, show, hide };
+})();
+
+// Initialize fix panel on DOM ready
+document.addEventListener('DOMContentLoaded', () => FixPanel.bind());
+window.FixPanel = FixPanel;

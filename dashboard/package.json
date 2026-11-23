@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "build:extension": "node ../scripts/build-extension-zip.mjs",
+    "prebuild": "npm run build:extension",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview"

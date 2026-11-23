@@ -3,12 +3,12 @@
  * Features:
  *  - Dynamic form registry (AOC-4, AOC-4-OFFLINE, ADT-1, MGT-7, DIR-3-KYC, SPICE-A, INC-32 with real fields)
  *  - Master Directory of all 58 statutory forms on the MCA V3 Portal with search & category filters
- *  - Shared draft state per form
- *  - Doc Upload → AI OCR Extract → Auto-fill into draft
+ *  - Per-form drafts, saved in the browser (lib/drafts.js)
+ *  - Scan Document: real scanner via the backend, mapped onto form fields (lib/scanToHub.js)
  *  - FileSure submission → updates draft with SRN data
  *  - Direct Browser Connector to Germin8 Chrome Extension (ping, live sync, client payload download)
- *  - Overview panel with completion %, errors, warnings, required documents
- *  - Tab-based navigation: Overview | Manual Fill | AI Doc Extractor | FileSure Submit | Extension Connector | Master Directory (58)
+ *  - Overview: start choices for an empty form, then completion %, missing fields, required documents
+ *  - Tabs: Overview | Scan Document | Fill Manually, with Directory / Payment / FileSure / Connector under "More"
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -24,7 +24,9 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import * as api from '../lib/api.js';
-import { MCA_FORMS, getFormByCode, simulateOcrExtraction } from '../data/mcaForms.js';
+import { MCA_FORMS, getFormByCode } from '../data/mcaForms.js';
+import { loadDrafts, saveDrafts } from '../lib/drafts.js';
+import { SCAN_FORM_ID, mapScanToHub } from '../lib/scanToHub.js';
 import {
   MCA_CATEGORIES,
   MCA_MASTER_DIRECTORY,
@@ -264,12 +266,54 @@ function MasterDirectoryTab({ onSelectForm }) {
 }
 
 // ─── OVERVIEW PANEL ───────────────────────────────────────────────────────────
-function OverviewPanel({ form, draft, onGoToSection }) {
+function OverviewPanel({ form, draft, onGoToSection, onStart }) {
   const allFields = form.sections.flatMap(s => s.fields);
   const totalFields = allFields.length;
   const filledFields = allFields.filter(f => draft[f.key] && draft[f.key] !== '');
   const completionPct = totalFields > 0 ? Math.round((filledFields.length / totalFields) * 100) : 0;
   const missingRequired = allFields.filter(f => f.required && (!draft[f.key] || draft[f.key] === ''));
+  const canScan = !!SCAN_FORM_ID[form.code];
+
+  if (filledFields.length === 0) {
+    return (
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5 max-w-3xl">
+        <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-xs">
+          <h3 className="text-base font-bold text-black">How do you want to fill {form.code}?</h3>
+          <p className="text-xs text-gray-500 mt-1">{totalFields} fields in {form.sections.length} sections · Due {form.dueDate} · Late fee {form.penalty}</p>
+          <div className="grid sm:grid-cols-2 gap-3 mt-5">
+            <button onClick={() => onStart(canScan ? 'extractor' : 'manual')} disabled={!canScan}
+              className="text-left p-4 rounded-2xl border-2 border-black bg-black text-white hover:bg-gray-800 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed">
+              <ScanLine className="w-6 h-6 mb-2" />
+              <p className="text-sm font-bold">Scan a document</p>
+              <p className="text-[11px] text-gray-300 mt-1">
+                {canScan ? 'Upload the PDF or photo. Claude reads it and fills the fields; you review them.' : `Not available for ${form.code} yet.`}
+              </p>
+            </button>
+            <button onClick={() => onStart('manual')}
+              className="text-left p-4 rounded-2xl border-2 border-gray-200 bg-white hover:border-black cursor-pointer transition-all">
+              <FileText className="w-6 h-6 mb-2 text-black" />
+              <p className="text-sm font-bold text-black">Fill manually</p>
+              <p className="text-[11px] text-gray-500 mt-1">Type the values section by section, with required fields marked.</p>
+            </button>
+          </div>
+        </div>
+        {(form.requiredDocs || []).length > 0 && (
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-xs">
+            <h3 className="text-sm font-bold text-black mb-3">Documents you'll need</h3>
+            <div className="space-y-1.5">
+              {form.requiredDocs.map((doc, idx) => (
+                <div key={idx} className="flex items-center gap-2.5 text-xs">
+                  <FileText className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                  <span className="text-black flex-1">{doc.name}</span>
+                  <span className="text-[10px] text-gray-500">{doc.required ? 'Required' : 'Optional'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
@@ -516,171 +560,171 @@ function ManualFillTab({ form, draft, onChange, activeSection, onChangeSection, 
   );
 }
 
-// ─── AI DOC EXTRACTOR TAB ─────────────────────────────────────────────────────
-function DocExtractorTab({ form, draft, onAutoFill }) {
+// ─── SCAN DOCUMENT TAB (real scanner via backend) ────────────────────────────
+const SCAN_API = `${api.API_ORIGIN}/api/gateway/claude`;
+
+function readUpload(file, as) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(as === 'base64' ? String(reader.result).split(',')[1] : reader.result);
+    reader.onerror = () => reject(new Error('Could not read the file'));
+    if (as === 'base64') reader.readAsDataURL(file); else reader.readAsText(file);
+  });
+}
+
+function ScanDocumentTab({ form, draft, onAutoFill, onFillManually }) {
+  const scanFormId = SCAN_FORM_ID[form.code];
   const [file, setFile] = useState(null);
-  const [processing, setProcessing] = useState(false);
-  const [extractedData, setExtractedData] = useState(null);
-  const [currentStep, setCurrentStep] = useState(0);
-  const fileInputRef = useRef(null);
+  const [scanning, setScanning] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [error, setError] = useState(null);
+  const [mapped, setMapped] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef();
 
-  const canExtract = (form.ocrExtractable || []).length > 0;
+  useEffect(() => {
+    if (!scanning) return undefined;
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [scanning]);
 
-  const STEPS = [
-    'Parsing PDF layout and financial tabular structures…',
-    'Executing neural OCR on Balance Sheet, P&L & Notes…',
-    'Extracting MCA statutory field keys & cross-validating…',
-    'Confidence scoring and mapping to form draft…',
-  ];
-
-  const handleStartExtraction = () => {
-    if (!file) return;
-    setProcessing(true);
-    setCurrentStep(0);
-
-    const stepInterval = setInterval(() => {
-      setCurrentStep(prev => {
-        if (prev < STEPS.length - 1) return prev + 1;
-        clearInterval(stepInterval);
-        return prev;
-      });
-    }, 450);
-
-    setTimeout(() => {
-      clearInterval(stepInterval);
-      const res = simulateOcrExtraction(form.code, file.name);
-      setExtractedData(res);
-      setProcessing(false);
-    }, 2000);
-  };
-
-  const handleApplyToDraft = () => {
-    if (!extractedData) return;
-    onAutoFill(extractedData.extractedData, Object.keys(extractedData.extractedData));
-  };
-
-  if (!canExtract) {
+  if (!scanFormId) {
     return (
-      <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center max-w-lg mx-auto shadow-xs">
-        <Info className="w-8 h-8 text-black mx-auto mb-3" />
-        <h3 className="text-base font-bold text-black mb-1">OCR Extractor Not Applicable for {form.code}</h3>
-        <p className="text-xs text-gray-500 mb-4 leading-relaxed">
-          {form.name} is a naming or incorporation procedure where details are originated rather than extracted from audited accounts. Please use the Manual Fill tab to enter details directly.
-        </p>
-      </div>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-xs">
+        <ScanLine className="w-7 h-7 text-gray-300 mx-auto" />
+        <p className="text-sm font-semibold text-black mt-3">Scanning isn't available for {form.code} yet</p>
+        <p className="text-xs text-gray-500 mt-1">The scanner currently reads AOC-4, ADT-1, MGT-7 and DIR-3 KYC documents.</p>
+        <button onClick={onFillManually} className="mt-4 px-5 py-2.5 rounded-full bg-black text-white text-xs font-semibold cursor-pointer hover:bg-gray-800">
+          Fill manually instead
+        </button>
+      </motion.div>
     );
   }
 
+  const scan = async (f) => {
+    if (!f) return;
+    setError(null); setMapped(null); setElapsed(0);
+    if (f.size > 20 * 1024 * 1024) { setError(`${f.name} is larger than 20 MB.`); return; }
+    const isBinary = f.type === 'application/pdf' || f.type.startsWith('image/');
+    const isText = /\.(txt|csv)$/i.test(f.name) || f.type.startsWith('text/');
+    if (!isBinary && !isText) { setError('Upload a PDF, PNG, JPG, WEBP, TXT or CSV file.'); return; }
+    setFile(f);
+    setScanning(true);
+    try {
+      const body = isBinary
+        ? { fileBase64: await readUpload(f, 'base64'), mimeType: f.type, formType: scanFormId }
+        : { text: await readUpload(f, 'text'), formType: scanFormId };
+      const res = await fetch(`${SCAN_API}/${isBinary ? 'vision' : 'extract'}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!json.ok || !json.extractedFields) throw new Error(json.message || 'The scanner returned no data');
+      const m = mapScanToHub(form, json);
+      setMapped({ ...m, model: json.model, failedParts: json.extractedFields.meta?.failedParts || [] });
+    } catch (err) {
+      setError(err.message === 'Failed to fetch' ? `Backend not reachable on ${api.API_ORIGIN} — is it running?` : err.message);
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const labelOf = key => form.sections.flatMap(s => s.fields).find(f => f.key === key)?.label || key;
+  const overwrites = mapped ? mapped.filledKeys.filter(k => draft[k] && draft[k] !== '' && draft[k] !== mapped.values[k]) : [];
+
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5">
-      {/* Upload Box */}
-      <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-xs">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-base font-bold text-black">Upload Statutory Documents for {form.code}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Supports Audited Financial Statements, Balance Sheet, P&L, Board Resolution, or Auditor Certificates (PDF, PNG, JPG).
-            </p>
-          </div>
-          <span className="badge bg-gray-100 text-black border border-gray-200 font-mono text-[11px]">
-            {form.ocrExtractable.length} Target Fields
-          </span>
-        </div>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf,.png,.jpg,.jpeg,.xlsx"
-          className="hidden"
-          onChange={e => {
-            if (e.target.files?.[0]) setFile(e.target.files[0]);
-          }}
-        />
-
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4 max-w-3xl">
+      {!mapped && (
         <div
-          onClick={() => fileInputRef.current?.click()}
-          className="border-2 border-dashed border-gray-300 hover:border-black rounded-xl p-8 text-center cursor-pointer transition-all bg-gray-50/50 hover:bg-gray-50"
+          onDragOver={e => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={e => { e.preventDefault(); setDragging(false); if (!scanning) scan(e.dataTransfer.files?.[0]); }}
+          onClick={() => !scanning && inputRef.current?.click()}
+          className={clsx(
+            'border-2 border-dashed rounded-2xl p-12 flex flex-col items-center gap-3 bg-white transition-colors',
+            scanning ? 'border-gray-200 cursor-wait' : 'cursor-pointer hover:border-black hover:bg-gray-50',
+            dragging ? 'border-black bg-gray-50' : 'border-gray-200',
+          )}
         >
-          <Upload className="w-8 h-8 text-black mx-auto mb-2" />
-          <p className="text-xs font-semibold text-black">
-            {file ? file.name : 'Click to select or drag and drop financial document'}
-          </p>
-          <p className="text-[11px] text-gray-400 mt-1">
-            {file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` : 'PDF, JPEG, or PNG up to 25MB'}
-          </p>
+          <input ref={inputRef} type="file" className="hidden" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.csv"
+            onChange={e => { scan(e.target.files?.[0]); e.target.value = ''; }} />
+          <div className="w-14 h-14 rounded-2xl bg-gray-50 border border-gray-200 flex items-center justify-center">
+            {scanning ? <RefreshCw className="w-7 h-7 animate-spin" /> : <Upload className="w-7 h-7" />}
+          </div>
+          {scanning ? (
+            <div className="text-center">
+              <p className="text-sm font-semibold text-black">Reading {file?.name}…</p>
+              <p className="text-xs text-gray-500 mt-1 font-mono">{elapsed}s elapsed · usually {form.code === 'AOC-4' ? '30–60' : '15–40'} seconds</p>
+            </div>
+          ) : (
+            <div className="text-center">
+              <p className="text-sm font-semibold text-black">Drop the {form.code} document here, or click to browse</p>
+              <p className="text-xs text-gray-500 mt-1">PDF (scanned is fine), PNG, JPG, WEBP, TXT or CSV, up to 20 MB</p>
+            </div>
+          )}
         </div>
+      )}
 
-        {file && !processing && !extractedData && (
-          <div className="mt-4 flex justify-end">
-            <button
-              onClick={handleStartExtraction}
-              className="px-6 py-2.5 rounded-full bg-black text-white hover:bg-gray-800 text-xs font-semibold flex items-center gap-2 cursor-pointer shadow-xs"
-            >
-              <ScanLine className="w-4 h-4" /> Start AI Neural Extraction
+      {error && (
+        <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-2xl">
+          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          <p className="text-xs text-red-700 font-medium">{error}</p>
+        </div>
+      )}
+
+      {mapped && (
+        <div className="bg-white border border-gray-200 rounded-2xl shadow-xs overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-start gap-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-bold text-black">Found {mapped.filledKeys.length} {form.code} values in {file?.name}</p>
+              <p className="text-[11px] text-gray-500 mt-0.5">{mapped.model}. Check them below, then apply them to the form.</p>
+            </div>
+            <button onClick={() => { setMapped(null); setFile(null); }} className="text-xs font-semibold text-black hover:underline cursor-pointer">Scan another</button>
+          </div>
+
+          <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+            {mapped.filledKeys.map(k => (
+              <div key={k} className="px-5 py-2 grid grid-cols-[1fr_1fr] gap-3 text-xs">
+                <span className="text-gray-600">{labelOf(k)}</span>
+                <span className="font-medium text-black truncate">
+                  {mapped.values[k]}
+                  {overwrites.includes(k) && <span className="ml-2 text-[10px] text-amber-700 font-semibold">replaces “{draft[k]}”</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {mapped.failedParts.length > 0 && (
+            <div className="px-5 py-3 bg-red-50/70 border-t border-red-100 text-[11px] text-red-700 space-y-0.5">
+              <p className="font-semibold">Part of the document couldn't be read this time — scan again, or fill those fields manually:</p>
+              {mapped.failedParts.map(p => <p key={p}>{p}</p>)}
+            </div>
+          )}
+
+          {mapped.notPlaced.length > 0 && (
+            <div className="px-5 py-3 bg-amber-50/60 border-t border-amber-100 text-[11px] text-amber-800 space-y-0.5">
+              <p className="font-semibold">Read but not placed — enter these yourself:</p>
+              {mapped.notPlaced.map(n => <p key={n.key}>{n.label}: “{n.value}” ({n.reason})</p>)}
+            </div>
+          )}
+
+          {form.code === 'AOC-4' && (
+            <p className="px-5 py-2.5 text-[11px] text-gray-500 border-t border-gray-100">
+              This form keeps the summary figures. For the full AOC-4 (balance sheet break-ups, P&L details, 200+ fields) use <a href="/dashboard/user/scanner" className="font-semibold text-black underline">AI Scanner</a>.
+            </p>
+          )}
+
+          <div className="px-5 py-3.5 bg-gray-50/60 border-t border-gray-100 flex items-center gap-3">
+            <span className="text-[11px] text-gray-500 flex-1">
+              {overwrites.length > 0 ? `${overwrites.length} field(s) you already filled will be replaced.` : 'Nothing you typed will be replaced.'}
+            </span>
+            <button onClick={() => onAutoFill(mapped.values, mapped.filledKeys)} disabled={!mapped.filledKeys.length}
+              className="px-5 py-2.5 rounded-full bg-black text-white text-xs font-semibold cursor-pointer hover:bg-gray-800 disabled:opacity-40 flex items-center gap-1.5">
+              <Check className="w-3.5 h-3.5" /> Apply {mapped.filledKeys.length} values
             </button>
           </div>
-        )}
-
-        {/* Processing animation */}
-        {processing && (
-          <div className="mt-5 p-4 rounded-xl border border-gray-200 bg-gray-50 space-y-3">
-            <div className="flex items-center gap-2 text-xs font-semibold text-black">
-              <RefreshCw className="w-4 h-4 animate-spin" />
-              <span>{STEPS[currentStep]}</span>
-            </div>
-            <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-black rounded-full transition-all duration-300"
-                style={{ width: `${((currentStep + 1) / STEPS.length) * 100}%` }}
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Extracted preview */}
-      {extractedData && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white border border-gray-200 rounded-2xl p-6 shadow-xs space-y-4"
-        >
-          <div className="flex items-center justify-between border-b border-gray-100 pb-4">
-            <div>
-              <h3 className="text-sm font-bold text-black flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-black" />
-                Successfully Extracted {extractedData.totalFieldsExtracted} Statutory Fields
-              </h3>
-              <p className="text-xs text-gray-500 mt-0.5">
-                From <span className="font-mono text-black">{extractedData.fileName}</span> with average 96% neural OCR confidence.
-              </p>
-            </div>
-            <button
-              onClick={handleApplyToDraft}
-              className="px-5 py-2.5 rounded-full bg-black text-white hover:bg-gray-800 text-xs font-semibold flex items-center gap-2 cursor-pointer shadow-xs"
-            >
-              <Check className="w-4 h-4" /> Auto-Fill into Form Draft →
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-            {Object.entries(extractedData.extractedData).map(([key, val]) => {
-              const conf = extractedData.confidenceScores[key] || 95;
-              const fieldDef = form.sections.flatMap(s => s.fields).find(f => f.key === key);
-              return (
-                <div key={key} className="p-3 rounded-xl border border-gray-200 bg-gray-50/40">
-                  <div className="flex items-center justify-between text-[10px] text-gray-500 font-mono mb-1">
-                    <span className="truncate mr-1">{fieldDef?.label || key}</span>
-                    <span className="badge bg-black text-white text-[9px] shrink-0">{conf}%</span>
-                  </div>
-                  <p className="text-xs font-semibold text-black truncate font-mono">
-                    {String(val)}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </motion.div>
+        </div>
       )}
     </motion.div>
   );
@@ -690,7 +734,7 @@ function DocExtractorTab({ form, draft, onAutoFill }) {
 function FileSureTab({ form, draft, onSwitchToConnector }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [srn, setSrn] = useState(null);
-  const [dscToken, setDscToken] = useState('ePass2003_Ramesh_Sharma_Class3');
+  const [dscToken, setDscToken] = useState('');
   const [syncStatus, setSyncStatus] = useState('');
 
   const allFields = form.sections.flatMap(s => s.fields);
@@ -705,7 +749,7 @@ function FileSureTab({ form, draft, onSwitchToConnector }) {
       setSrn({
         srn: genSrn,
         form: form.code,
-        company: draft.companyName || 'Sharma & Associates Technologies Pvt Ltd',
+        company: draft.companyName || draft.cin || 'Company name not entered',
         timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
         fee: '₹600',
       });
@@ -777,15 +821,12 @@ function FileSureTab({ form, draft, onSwitchToConnector }) {
         <label className="block text-xs font-semibold text-gray-700 mb-2">
           Class 3 DSC Token Selection *
         </label>
-        <select
-          className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg outline-none focus:border-black font-mono bg-white cursor-pointer"
+        <input
+          className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg outline-none focus:border-black bg-white"
           value={dscToken}
           onChange={e => setDscToken(e.target.value)}
-        >
-          <option value="ePass2003_Ramesh_Sharma_Class3">ePass2003 — Ramesh Sharma (Class 3 DSC)</option>
-          <option value="ProxKey_Priya_Sharma_Class3">ProxKey — Priya Sharma (Class 3 Signing)</option>
-          <option value="WD_CFO_DSC">WD Token — CFO (Class 3 Corporate)</option>
-        </select>
+          placeholder="Name on the DSC token, e.g. the signing director"
+        />
       </div>
 
       {/* Action buttons */}
@@ -866,7 +907,7 @@ function PaymentVerificationTab({ form, draft, paymentVerified, setPaymentVerifi
   const [loading, setLoading] = useState(false);
   const [orderInfo, setOrderInfo] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState('upi');
-  const [upiId, setUpiId] = useState('staff@okhdfcbank');
+  const [upiId, setUpiId] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
 
   const handleCreateOrder = async () => {
@@ -1385,7 +1426,7 @@ function ExtensionConnectorTab({ form, draft, paymentVerified, paymentDetails, o
 
         <div className="p-3.5 bg-gray-50 border border-gray-200 rounded-xl flex items-center justify-between text-xs">
           <div>
-            <p className="font-bold text-black">{draft.companyName || draft.proposedName1 || 'Sharma & Associates Technologies Pvt Ltd'}</p>
+            <p className="font-bold text-black">{draft.companyName || draft.proposedName1 || draft.cin || 'Company name not entered'}</p>
             <p className="text-gray-500 font-mono text-[11px] mt-0.5">CIN: {draft.cin || 'Not set'}</p>
           </div>
           <span className="text-[11px] font-mono text-gray-500">
@@ -1441,6 +1482,7 @@ export default function McaFormsHub() {
   const selectedCode = MCA_FORMS.find(f => f.code === rawCode)?.code || MCA_FORMS[0].code;
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [activeTab, setActiveTab] = useState(searchParams.get('mode') || 'overview');
   const [activeSection, setActiveSection] = useState(null);
   const [highlightedKeys, setHighlightedKeys] = useState([]);
@@ -1448,26 +1490,31 @@ export default function McaFormsHub() {
   const [paymentVerified, setPaymentVerified] = useState(false);
   const [paymentDetails, setPaymentDetails] = useState(null);
 
-  // Per-form draft state
+  // Per-form drafts start empty and are kept in this browser (lib/drafts.js).
+  const stored = useRef(loadDrafts());
+  const updatedAt = useRef(Object.fromEntries(Object.entries(stored.current).map(([code, d]) => [code, d.updatedAt])));
   const [drafts, setDrafts] = useState(() => {
     const init = {};
-    MCA_FORMS.forEach(f => { init[f.code] = { ...f.defaultValues }; });
+    MCA_FORMS.forEach(f => { init[f.code] = { ...(stored.current[f.code]?.values || {}) }; });
     return init;
   });
+
+  useEffect(() => {
+    saveDrafts(Object.fromEntries(Object.entries(drafts).map(([code, values]) => [code, { values, updatedAt: updatedAt.current[code] }])));
+  }, [drafts]);
 
   const form = getFormByCode(selectedCode);
   const draft = drafts[selectedCode] || {};
 
-  // Fetch pre-seeded drafts and payment status from real SQLite backend
+  // A saved ADT-1 draft on the backend fills the ADT-1 form only when nothing was typed here yet.
   useEffect(() => {
     api.getAdt1Drafts().then(res => {
       if (res?.ok && res.drafts?.length > 0) {
         const dbDraft = res.drafts[0];
         if (dbDraft.formData) {
-          setDrafts(prev => ({
-            ...prev,
-            'ADT-1': { ...prev['ADT-1'], ...dbDraft.formData }
-          }));
+          setDrafts(prev => (Object.values(prev['ADT-1'] || {}).some(v => v !== '' && v != null)
+            ? prev
+            : { ...prev, 'ADT-1': { ...dbDraft.formData } }));
         }
         if (dbDraft.payment_status === 'success' || dbDraft.status === 'paid') {
           setPaymentVerified(true);
@@ -1510,15 +1557,26 @@ export default function McaFormsHub() {
   };
 
   const handleFieldChange = (key, value) => {
+    updatedAt.current[selectedCode] = Date.now();
     setDrafts(prev => ({ ...prev, [selectedCode]: { ...prev[selectedCode], [key]: value } }));
   };
 
   const handleAutoFill = (fillMap, keys) => {
+    updatedAt.current[selectedCode] = Date.now();
     setDrafts(prev => ({ ...prev, [selectedCode]: { ...prev[selectedCode], ...fillMap } }));
     setHighlightedKeys(keys);
     setActiveTab('manual');
+    setSearchParams({ form: selectedCode, mode: 'manual' });
     setActiveSection(form.sections[0]?.id);
     setTimeout(() => setHighlightedKeys([]), 8000);
+  };
+
+  const handleClearDraft = () => {
+    if (!window.confirm(`Clear everything entered for ${selectedCode}? This can't be undone.`)) return;
+    delete updatedAt.current[selectedCode];
+    setDrafts(prev => ({ ...prev, [selectedCode]: {} }));
+    setHighlightedKeys([]);
+    handleTabChange('overview');
   };
 
   const handleGoToSection = (sectionId) => {
@@ -1541,14 +1599,17 @@ export default function McaFormsHub() {
   const missingRequired = allFields.filter(f => f.required && (!draft[f.key] || draft[f.key] === ''));
 
   const TABS = [
-    { id: 'directory', label: 'Master Directory (58)', icon: Layers },
-    { id: 'overview', label: 'Form Overview', icon: Eye },
-    { id: 'manual', label: 'Manual Fill', icon: FileText },
-    { id: 'payment', label: selectedCode === 'ADT-1' && paymentVerified ? 'Fee Paid (₹500) ✅' : 'Payment Verification (Test)', icon: CreditCard },
-    { id: 'extractor', label: 'AI Doc Extractor', icon: ScanLine },
-    { id: 'filesure', label: 'FileSure Submit', icon: Zap },
-    { id: 'connector', label: 'Extension Connector', icon: Radio },
+    { id: 'overview', label: 'Overview', icon: Eye },
+    { id: 'extractor', label: 'Scan Document', icon: ScanLine },
+    { id: 'manual', label: 'Fill Manually', icon: FileText },
   ];
+  const MORE_TABS = [
+    { id: 'directory', label: 'All 58 MCA forms', icon: Layers },
+    { id: 'payment', label: selectedCode === 'ADT-1' && paymentVerified ? 'Fee paid (₹500)' : 'Payment verification (test)', icon: CreditCard },
+    { id: 'filesure', label: 'FileSure submit', icon: Zap },
+    { id: 'connector', label: 'Extension connector', icon: Radio },
+  ];
+  const activeMore = MORE_TABS.find(t => t.id === activeTab);
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5">
@@ -1689,6 +1750,41 @@ export default function McaFormsHub() {
             </button>
           );
         })}
+
+        <div className="relative ml-auto">
+          <button
+            onClick={() => setMoreOpen(o => !o)}
+            className={clsx(
+              'px-4 py-2 rounded-full text-xs font-semibold flex items-center gap-2 cursor-pointer transition-all border',
+              activeMore ? 'bg-black text-white border-black' : 'bg-white text-gray-700 border-gray-200 hover:border-gray-400'
+            )}
+          >
+            {activeMore ? activeMore.label : 'More'}
+            <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', moreOpen && 'rotate-180')} />
+          </button>
+          {moreOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />
+              <div className="absolute right-0 top-full mt-2 w-60 bg-white border border-gray-200 rounded-2xl shadow-xl z-50 p-1.5">
+                {MORE_TABS.map(tab => {
+                  const Icon = tab.icon;
+                  return (
+                    <button key={tab.id} onClick={() => { setMoreOpen(false); handleTabChange(tab.id); }}
+                      className={clsx('w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center gap-2.5 cursor-pointer',
+                        activeTab === tab.id ? 'bg-black text-white' : 'text-gray-700 hover:bg-gray-50')}>
+                      <Icon className="w-3.5 h-3.5" /> {tab.label}
+                    </button>
+                  );
+                })}
+                <div className="border-t border-gray-100 my-1" />
+                <button onClick={() => { setMoreOpen(false); handleClearDraft(); }} disabled={filledCount === 0}
+                  className="w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center gap-2.5 cursor-pointer text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                  <X className="w-3.5 h-3.5" /> Clear this form
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* ── TAB CONTENT ── */}
@@ -1705,6 +1801,7 @@ export default function McaFormsHub() {
             form={form}
             draft={draft}
             onGoToSection={handleGoToSection}
+            onStart={handleTabChange}
           />
         )}
         {activeTab === 'manual' && (
@@ -1731,11 +1828,12 @@ export default function McaFormsHub() {
           />
         )}
         {activeTab === 'extractor' && (
-          <DocExtractorTab
+          <ScanDocumentTab
             key="extractor"
             form={form}
             draft={draft}
             onAutoFill={handleAutoFill}
+            onFillManually={() => handleTabChange('manual')}
           />
         )}
         {activeTab === 'filesure' && (

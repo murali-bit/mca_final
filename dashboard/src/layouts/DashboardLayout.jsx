@@ -127,17 +127,6 @@ export default function DashboardLayout({ navItems = [], pageTitle = 'Dashboard'
         })}
       </nav>
 
-      {/* Active Client / Company Pill */}
-      <div className="px-3 pb-2">
-        <div className="p-2.5 rounded-xl bg-gray-50 border border-gray-100">
-          <div className="flex items-center gap-2">
-            <Building2 className="w-3.5 h-3.5 text-black shrink-0" />
-            <p className="text-[11px] font-bold text-black truncate">Sharma & Associates</p>
-          </div>
-          <p className="text-[10px] text-gray-400 font-mono mt-0.5 truncate">U74999MH2020PTC344123</p>
-        </div>
-      </div>
-
       {/* User + Logout in Sidebar */}
       <div className="px-3 py-4 border-t border-gray-100">
         <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-gray-50 mb-2">
@@ -214,12 +203,6 @@ export default function DashboardLayout({ navItems = [], pageTitle = 'Dashboard'
 
         <div className="flex-1 min-w-0">
           <h1 className="text-base font-bold text-gray-900 truncate leading-tight">{pageTitle}</h1>
-        </div>
-
-        {/* Client Tag */}
-        <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-50 border border-gray-200 text-xs font-medium text-black">
-          <Building2 className="w-3.5 h-3.5 text-black" />
-          <span className="truncate max-w-[140px]">Sharma & Associates</span>
         </div>
 
         {/* ── NOTIFICATION BELL & DROPDOWN ── */}

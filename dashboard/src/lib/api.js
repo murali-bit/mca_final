@@ -3,7 +3,8 @@
  * Connects the Dashboard to the local Node.js + SQLite backend on http://localhost:4000
  */
 
-const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:4000') + '/api';
+export const API_ORIGIN = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const API_BASE = API_ORIGIN + '/api';
 
 function getAuthHeader() {
   const token = localStorage.getItem('germin8_auth_token');
@@ -171,6 +172,29 @@ export async function extractWithClaudeGateway(text) {
   return request('/gateway/claude/extract', {
     method: 'POST',
     body: JSON.stringify({ text }),
+  });
+}
+
+// ─── EXTENSION PUSH & JOBS ──────────────────────────────────────────────────
+export async function pushToExtension(data) {
+  return request('/extension/push', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getExtensionJobs() {
+  return request('/extension/jobs', { method: 'GET' });
+}
+
+export async function getExtensionJobStatus(jobId) {
+  return request(`/extension/jobs/${jobId}`, { method: 'GET' });
+}
+
+export async function updateExtensionJob(jobId, updates) {
+  return request(`/extension/jobs/${jobId}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
   });
 }
 

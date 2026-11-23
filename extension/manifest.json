@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Germin8",
-  "version": "1.5.7",
+  "version": "1.5.8",
   "description": "Germin8 MCA Auto Filler — Pick a form (AOC-4, AOC-4 Offline, SPICe+ Part A, INC-32, DIR-3 KYC), pick a client, click Fill — the MCA form auto-populates.",
   "minimum_chrome_version": "114",
-  "permissions": ["activeTab", "scripting", "storage", "sidePanel", "tabs"],
-  "host_permissions": ["https://www.mca.gov.in/*", "https://*.mca.gov.in/*"],
+  "permissions": ["activeTab", "scripting", "storage", "sidePanel", "tabs", "alarms"],
+  "host_permissions": ["https://www.mca.gov.in/*", "https://*.mca.gov.in/*", "http://localhost:4000/*"],
   "action": {
     "default_title": "Open Germin8"
   },

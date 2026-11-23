@@ -223,6 +223,34 @@ export async function sendDraftToExtension(formCode, draftData, customId, custom
 }
 
 /**
+ * Sends a full nested AOC-4 client (extension/clients/*_aoc4.json shape) to the
+ * extension, which stores it under importedClients ready for the AOC-4 filler.
+ */
+export async function sendAoc4ClientToExtension(client) {
+  const { extId, pairingKey } = getSavedExtensionConfig();
+  if (!extId) return { ok: false, error: 'Extension ID not set — add it in MCA Forms Hub → Extension Bridge.' };
+  if (!isChromeExtensionBridgeAvailable()) {
+    return { ok: false, error: 'Direct send needs Chrome with the Germin8 extension installed.' };
+  }
+  const message = { action: 'importClient', formType: 'aoc4', client };
+  if (pairingKey) message.key = pairingKey;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ ok: false, error: 'Extension did not answer within 8s.' }), 8000);
+    try {
+      window.chrome.runtime.sendMessage(extId, message, (res) => {
+        clearTimeout(timer);
+        const lastErr = window.chrome.runtime.lastError;
+        if (lastErr) return resolve({ ok: false, error: lastErr.message });
+        resolve(res || { ok: false, error: 'No response from extension.' });
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      resolve({ ok: false, error: err.message });
+    }
+  });
+}
+
+/**
  * Downloads the draft formatted as a Germin8 Extension client JSON file.
  */
 export function downloadExtensionPayload(formCode, draftData) {

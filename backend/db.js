@@ -94,6 +94,19 @@ db.exec(`
     details TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS extension_jobs (
+    id TEXT PRIMARY KEY,
+    form_type TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    client_name TEXT,
+    payload TEXT NOT NULL,
+    status TEXT DEFAULT 'ready',
+    phase INTEGER DEFAULT 0,
+    result TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 export default db;

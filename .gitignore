@@ -36,5 +36,11 @@ extension/*.crx
 extension/*.pem
 extension/*.zip
 
+# Real client data (financials, DINs, PANs) — local only, never published
+extension/clients/*.json
+
+# Claude Code local state (session worktrees, launch config)
+.claude/
+
 # Temp
 *.tmp

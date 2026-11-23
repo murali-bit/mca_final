@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { Routes, Route, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -41,357 +41,181 @@ import {
   CheckCheck,
   Copy,
   Layers,
+  PenLine,
+  Puzzle,
 } from 'lucide-react';
 import DashboardLayout from '../../../layouts/DashboardLayout';
 import McaFormsHub from '../../../components/McaFormsHub';
+import AiScanner from '../../../components/scanner/AiScanner';
+import ExtensionSetup from '../../../components/ExtensionSetup';
+import { MCA_FORMS } from '../../../data/mcaForms.js';
+import { loadDrafts, draftProgress } from '../../../lib/drafts.js';
 import clsx from 'clsx';
 
 const NAV_ITEMS = [
   { label: 'Overview', icon: LayoutDashboard, path: '/dashboard/user/overview' },
   { label: 'MCA Forms Hub', icon: FileText, path: '/dashboard/user/forms' },
-  { label: 'MCA Directory (58)', icon: Layers, path: '/dashboard/user/forms?mode=directory', badge: '58' },
   { label: 'AI Scanner', icon: ScanLine, path: '/dashboard/user/scanner' },
   { label: 'Document Vault', icon: FolderOpen, path: '/dashboard/user/vault' },
+  { label: 'Chrome Extension', icon: Puzzle, path: '/dashboard/user/extension' },
   { label: 'AI Support', icon: MessageCircle, path: '/dashboard/user/support' },
 ];
 
-/* ─── OVERVIEW STATS (Professional Pure White / Neutral Theme) ─── */
-const STAT_CARDS = [
-  { label: 'Forms Submitted', value: '24', delta: '+3 this week', icon: FileText },
-  { label: 'Pending Forms', value: '5', delta: '2 due soon', icon: Clock },
-  { label: 'Documents Scanned', value: '138', delta: '+12 this month', icon: ScanLine },
-  { label: "This Month's Filings", value: '8', delta: 'Target: 10', icon: TrendingUp },
-];
-
-const RECENT_ACTIVITY = [
-  { form: 'MGT-7 Annual Return', date: 'Nov 8, 2026', status: 'Filed', method: 'FileSure API' },
-  { form: 'AOC-4 Financial Stmt', date: 'Nov 5, 2026', status: 'Filed', method: 'AI Scan' },
-  { form: 'DIR-3 KYC', date: 'Nov 1, 2026', status: 'Draft', method: 'Manual Entry' },
-  { form: 'INC-22A Active Status', date: 'Oct 28, 2026', status: 'Due Soon', method: 'FileSure API' },
-  { form: 'DPT-3 Return Deposits', date: 'Oct 20, 2026', status: 'Filed', method: 'Manual Entry' },
-];
-
-const MOCK_DOCS = [
-  { name: 'AOC-4_FY2025.pdf', type: 'pdf', date: 'Nov 5, 2026', size: '1.2 MB' },
-  { name: 'DIR-3-KYC_Arjun.pdf', type: 'pdf', date: 'Nov 1, 2026', size: '0.8 MB' },
-  { name: 'PAN_Card_scan.png', type: 'img', date: 'Oct 29, 2026', size: '2.3 MB' },
-  { name: 'Aadhaar_front.jpg', type: 'img', date: 'Oct 28, 2026', size: '1.8 MB' },
-  { name: 'Certificate_Incorp.pdf', type: 'pdf', date: 'Oct 20, 2026', size: '3.1 MB' },
-  { name: 'GST_Certificate.pdf', type: 'pdf', date: 'Oct 15, 2026', size: '0.6 MB' },
-  { name: 'Balance_Sheet_FY25.pdf', type: 'pdf', date: 'Oct 10, 2026', size: '5.4 MB' },
-  { name: 'Utility_Bill.jpg', type: 'img', date: 'Oct 5, 2026', size: '1.1 MB' },
-];
+const START_FORMS = ['AOC-4', 'ADT-1', 'MGT-7', 'DIR-3-KYC'];
 
 const INITIAL_MESSAGES = [
   {
     id: 1,
     role: 'ai',
-    text: "Hello! I am Germin8's AI compliance assistant. How can I assist with your AOC-4, MGT-7, or FileSure API filings today?",
-  },
-  { id: 2, role: 'user', text: 'What is the due date for AOC-4 this fiscal year?' },
-  {
-    id: 3,
-    role: 'ai',
-    text: 'Form AOC-4 must be filed within 30 days from the conclusion of the Annual General Meeting (AGM). For FY 2025–26, if your AGM is held on September 30, 2026, the due date is October 30, 2026. You can auto-fill all 26 statutory fields in 1-click via FileSure API.',
+    text: "Hello! I am Germin8's AI compliance assistant. How can I help with your MCA filings today?",
   },
 ];
 
 const QUICK_QUESTIONS = [
   'AOC-4 due date & penalties?',
   'DIR-3 KYC deadline?',
-  'FileSure API autofill steps',
   'Balance sheet balance check',
   'SRN challan generation',
 ];
 
-function StatusBadge({ status }) {
-  if (!status) return null;
-  const cls =
-    {
-      Filed: 'bg-emerald-50 text-emerald-800 border border-emerald-200',
-      Draft: 'bg-gray-100 text-gray-800 border border-gray-200',
-      Ready: 'bg-black text-white',
-      'Due Soon': 'bg-amber-50 text-amber-800 border border-amber-200',
-    }[status] || 'bg-gray-100 text-gray-700 border border-gray-200';
-  return <span className={clsx('badge text-[11px] font-medium font-mono', cls)}>{status}</span>;
+function timeAgo(ts) {
+  if (!ts) return '';
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
 }
 
-// ─── OVERVIEW TAB (Unchanged Structure, Upgraded to Crisp Pure White / Black Theme) ──
+// ─── OVERVIEW: start a filing + filings in progress ──────────────────────────
 function Overview() {
   const navigate = useNavigate();
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-      {/* 4 Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {STAT_CARDS.map((s, i) => {
-          const Icon = s.icon;
-          return (
-            <motion.div
-              key={s.label}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-              className="bg-white border border-gray-200 rounded-2xl p-5 shadow-xs hover:border-gray-400 transition-all"
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider font-mono">{s.label}</p>
-                  <p className="hero-headline text-3xl text-black mt-1">{s.value}</p>
-                  <p className="text-xs text-gray-400 mt-1 font-google">{s.delta}</p>
-                </div>
-                <div className="w-10 h-10 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center text-black">
-                  <Icon className="w-5 h-5" />
-                </div>
-              </div>
-            </motion.div>
-          );
-        })}
-      </div>
+  const [formCode, setFormCode] = useState('AOC-4');
+  const form = MCA_FORMS.find(f => f.code === formCode) || MCA_FORMS[0];
 
-      {/* Quick Action Buttons */}
-      <div className="flex flex-wrap gap-3">
-        <button
-          onClick={() => navigate('/dashboard/user/forms?mode=directory')}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-black text-white hover:bg-gray-800 text-xs font-medium shadow-xs transition-all cursor-pointer"
-        >
-          <Layers className="w-4 h-4" /> MCA Master Directory (58)
-        </button>
-        <button
-          onClick={() => navigate('/dashboard/user/forms')}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white border border-gray-200 text-black hover:border-black text-xs font-medium transition-all cursor-pointer"
-        >
-          <Plus className="w-4 h-4" /> Open MCA Forms Hub
-        </button>
-        <button
-          onClick={() => navigate('/dashboard/user/forms?form=aoc4&mode=extractor')}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white border border-gray-200 text-black hover:bg-gray-50 text-xs font-medium transition-all cursor-pointer"
-        >
-          <ScanLine className="w-4 h-4" /> AI Document Scanner
-        </button>
-        <button
-          onClick={() => navigate('/dashboard/user/forms?form=aoc4&mode=filesure')}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-gray-100 text-black hover:bg-gray-200 text-xs font-medium transition-all cursor-pointer"
-        >
-          <Zap className="w-4 h-4" /> FileSure Direct Submission
-        </button>
-        <button
-          onClick={() => navigate('/dashboard/user/support')}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white border border-gray-200 text-gray-700 hover:text-black hover:bg-gray-50 text-xs font-medium transition-all cursor-pointer"
-        >
-          <MessageCircle className="w-4 h-4" /> AI Copilot Support
-        </button>
-      </div>
+  const inProgress = useMemo(() => Object.entries(loadDrafts())
+    .map(([code, d]) => {
+      const f = MCA_FORMS.find(x => x.code === code);
+      return f ? { form: f, updatedAt: d.updatedAt, ...draftProgress(f, d.values) } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)), []);
 
-      {/* Recent Activity Table */}
-      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-xs">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="hero-headline text-sm text-black">Recent Statutory Filings & Activity</h2>
-          <button
-            onClick={() => navigate('/dashboard/user/forms')}
-            className="text-xs text-black font-semibold hover:underline flex items-center gap-1 cursor-pointer"
-          >
-            Open All Forms <ArrowUpRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-gray-100 bg-gray-50/50">
-              <th className="px-6 py-3 text-left font-semibold text-gray-600">Form & Purpose</th>
-              <th className="px-6 py-3 text-left font-semibold text-gray-600">Method</th>
-              <th className="px-6 py-3 text-left font-semibold text-gray-600">Date</th>
-              <th className="px-6 py-3 text-left font-semibold text-gray-600">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {RECENT_ACTIVITY.map((row) => (
-              <tr key={row.form} className="hover:bg-gray-50/60 transition-colors">
-                <td className="px-6 py-3.5 font-semibold text-black">{row.form}</td>
-                <td className="px-6 py-3.5">
-                  <span className="px-2 py-0.5 rounded-md bg-gray-100 text-black font-mono text-[11px] font-medium border border-gray-200">
-                    {row.method}
-                  </span>
-                </td>
-                <td className="px-6 py-3.5 text-gray-500 font-google">{row.date}</td>
-                <td className="px-6 py-3.5">
-                  <StatusBadge status={row.status} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </motion.div>
-  );
-}
-
-// ─── AI SCANNER TAB (Clean White Theme) ───────────────────────────────────────
-const MOCK_EXTRACTED = [
-  { field: 'Company Name', value: 'Sharma & Associates Pvt. Ltd.', confidence: 97 },
-  { field: 'CIN', value: 'U74999MH2020PTC344123', confidence: 94 },
-  { field: 'Director Name', value: 'Priya Sharma', confidence: 99 },
-  { field: 'DIN', value: '08765432', confidence: 91 },
-  { field: 'Date of Filing', value: '15 October 2026', confidence: 88 },
-  { field: 'Authorised Cap.', value: '₹10,00,000', confidence: 85 },
-];
-
-function AiScanner() {
-  const [uploaded, setUploaded] = useState(false);
-  const [dragging, setDragging] = useState(false);
-  const [isScanning, setIsScanning] = useState(false);
-  const inputRef = useRef();
-
-  const handleFile = () => {
-    setIsScanning(true);
-    setTimeout(() => {
-      setIsScanning(false);
-      setUploaded(true);
-    }, 1200);
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragging(false);
-    if (e.dataTransfer.files.length) handleFile();
-  };
+  const open = (code, mode) => navigate(`/dashboard/user/forms?form=${code}&mode=${mode}`);
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5 max-w-3xl">
-      {!uploaded ? (
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={handleDrop}
-          onClick={() => inputRef.current?.click()}
-          className={clsx(
-            'border-2 border-dashed rounded-2xl p-16 flex flex-col items-center gap-4 cursor-pointer transition-all duration-200 bg-white',
-            dragging ? 'border-black bg-gray-50' : 'border-gray-200 hover:border-black hover:bg-gray-50'
-          )}
-        >
-          <input ref={inputRef} type="file" className="hidden" onChange={handleFile} />
-          <div className="w-16 h-16 rounded-2xl bg-gray-50 border border-gray-200 flex items-center justify-center text-black">
-            {isScanning ? (
-              <RefreshCw className="w-8 h-8 animate-spin" />
-            ) : (
-              <Upload className="w-8 h-8" />
-            )}
-          </div>
-          <div className="text-center">
-            <p className="hero-headline text-base text-black">
-              {isScanning ? 'AI Engine Extracting OCR Data...' : 'Drop your document here for AI Scanning'}
-            </p>
-            <p className="text-xs text-gray-400 mt-1 font-google">
-              PDF, JPG, PNG up to 25MB — Financial Statements, Audits, KYC documents
-            </p>
-          </div>
-          <button className="px-5 py-2.5 rounded-full bg-black text-white hover:bg-gray-800 text-xs font-semibold shadow-xs mt-2 cursor-pointer flex items-center gap-2">
-            <Upload className="w-4 h-4" /> Choose Document
-          </button>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6 max-w-4xl">
+      {/* Start a new filing */}
+      <section className="bg-white border border-gray-200 rounded-2xl p-6 shadow-xs space-y-5">
+        <div>
+          <h2 className="hero-headline text-base text-black">Start a new filing</h2>
+          <p className="text-xs text-gray-500 mt-1">Pick the form, then choose how you want to fill it.</p>
         </div>
-      ) : (
-        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-          <div className="flex items-center gap-3 p-4 bg-gray-50 border border-gray-200 rounded-2xl">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-            <div>
-              <p className="text-sm font-bold text-black">Document Analyzed Successfully with AI Scanner</p>
-              <p className="text-xs text-gray-500 font-google">6 fields automatically extracted and ready to auto-populate MCA forms</p>
-            </div>
-            <button
-              onClick={() => setUploaded(false)}
-              className="ml-auto text-xs text-black font-semibold hover:underline cursor-pointer"
-            >
-              Scan another
+
+        <div>
+          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">1 · Which form?</p>
+          <div className="flex flex-wrap gap-2">
+            {START_FORMS.map(code => {
+              const f = MCA_FORMS.find(x => x.code === code);
+              if (!f) return null;
+              return (
+                <button key={code} onClick={() => setFormCode(code)}
+                  className={clsx('px-4 py-2 rounded-xl border text-left cursor-pointer transition-all',
+                    formCode === code ? 'bg-black text-white border-black' : 'bg-white text-black border-gray-200 hover:border-black')}>
+                  <span className="block text-xs font-bold font-mono">{f.shortLabel || f.code}</span>
+                  <span className={clsx('block text-[11px]', formCode === code ? 'text-gray-300' : 'text-gray-500')}>{f.name}</span>
+                </button>
+              );
+            })}
+            <button onClick={() => navigate('/dashboard/user/forms?mode=directory')}
+              className="px-4 py-2 rounded-xl border border-dashed border-gray-300 text-xs font-semibold text-gray-600 hover:border-black hover:text-black cursor-pointer flex items-center gap-1">
+              All 58 forms <ArrowUpRight className="w-3.5 h-3.5" />
             </button>
           </div>
+          <p className="text-[11px] text-gray-500 mt-2">
+            <span className="font-semibold text-black">{form.code}</span> — {form.desc}
+            {form.dueDate && <> · Due: {form.dueDate}</>}
+            {form.penalty && <> · Late fee: {form.penalty}</>}
+          </p>
+        </div>
 
-          <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-xs">
-            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center">
-              <div>
-                <h3 className="hero-headline text-sm text-black">Extracted Fields</h3>
-                <p className="text-xs text-gray-400 mt-0.5 font-google">Edit any field or transfer directly to MCA form</p>
-              </div>
-              <span className="px-2.5 py-1 rounded-full bg-black text-white text-[10px] font-mono font-bold">
-                OCR Engine v3.2
-              </span>
-            </div>
-            <div className="p-4 space-y-3">
-              {MOCK_EXTRACTED.map((item) => (
-                <div key={item.field} className="flex items-center gap-4">
-                  <div className="w-36 shrink-0">
-                    <p className="text-xs font-semibold text-gray-700">{item.field}</p>
-                  </div>
-                  <input defaultValue={item.value} className="input-field flex-1 py-2 text-xs font-medium" />
-                  <div className="flex items-center gap-1.5 w-20 shrink-0">
-                    <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className={clsx('h-full rounded-full', item.confidence >= 90 ? 'bg-black' : 'bg-gray-400')}
-                        style={{ width: `${item.confidence}%` }}
-                      />
+        <div>
+          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">2 · How do you want to fill it?</p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <button onClick={() => open(formCode, 'extractor')}
+              className="text-left p-4 rounded-2xl border-2 border-black bg-black text-white hover:bg-gray-800 cursor-pointer transition-all">
+              <ScanLine className="w-6 h-6 mb-2" />
+              <p className="text-sm font-bold">Scan a document</p>
+              <p className="text-[11px] text-gray-300 mt-1">Upload the PDF or photo. Claude reads it and fills the fields; you review before filing.</p>
+            </button>
+            <button onClick={() => open(formCode, 'manual')}
+              className="text-left p-4 rounded-2xl border-2 border-gray-200 bg-white hover:border-black cursor-pointer transition-all">
+              <PenLine className="w-6 h-6 mb-2 text-black" />
+              <p className="text-sm font-bold text-black">Fill manually</p>
+              <p className="text-[11px] text-gray-500 mt-1">Type the values section by section, with the required fields marked.</p>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* Filings in progress */}
+      <section className="bg-white border border-gray-200 rounded-2xl shadow-xs overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h2 className="hero-headline text-sm text-black">Your filings in progress</h2>
+          <p className="text-[11px] text-gray-500 mt-0.5">Drafts are saved in this browser as you work.</p>
+        </div>
+        {inProgress.length === 0 ? (
+          <div className="px-6 py-10 text-center">
+            <FileText className="w-6 h-6 text-gray-300 mx-auto" />
+            <p className="text-sm font-semibold text-black mt-2">No filings yet</p>
+            <p className="text-xs text-gray-500 mt-1">Start one above. It will show up here so you can continue later.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {inProgress.map(item => (
+              <div key={item.form.code} className="px-6 py-3.5 flex items-center gap-4">
+                <span className="px-2 py-0.5 rounded-md bg-gray-100 border border-gray-200 text-[11px] font-mono font-bold text-black shrink-0">{item.form.code}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-semibold text-black truncate">{item.form.name}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className="w-32 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-black rounded-full" style={{ width: `${item.pct}%` }} />
                     </div>
-                    <span className="text-[10px] font-bold text-gray-500 font-mono">{item.confidence}%</span>
+                    <span className="text-[11px] font-mono text-gray-600">{item.pct}%</span>
+                    <span className={clsx('text-[11px]', item.missingRequired ? 'text-amber-700' : 'text-emerald-700')}>
+                      {item.missingRequired ? `${item.missingRequired} required missing` : 'Ready to push'}
+                    </span>
                   </div>
                 </div>
-              ))}
-            </div>
-            <div className="px-6 pb-5 pt-2 flex gap-3">
-              <button
-                onClick={() => alert('Auto-filled into active AOC-4 draft!')}
-                className="flex-1 justify-center py-2.5 px-4 rounded-full bg-black text-white hover:bg-gray-800 text-xs font-semibold transition-all shadow-xs flex items-center gap-2 cursor-pointer"
-              >
-                <CheckCircle2 className="w-4 h-4" /> Auto-Fill MCA Form
-              </button>
-            </div>
+                <span className="text-[11px] text-gray-400 shrink-0">{timeAgo(item.updatedAt)}</span>
+                <button onClick={() => open(item.form.code, 'manual')}
+                  className="px-3 py-1.5 rounded-full border border-gray-300 text-xs font-semibold text-black hover:bg-gray-100 cursor-pointer shrink-0">
+                  Continue
+                </button>
+              </div>
+            ))}
           </div>
-        </motion.div>
-      )}
+        )}
+      </section>
     </motion.div>
   );
 }
 
-// ─── DOCUMENT VAULT TAB (Clean White Theme) ───────────────────────────────────
+// ─── DOCUMENT VAULT ───────────────────────────────────────────────────────────
 function DocumentVault() {
+  const navigate = useNavigate();
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h2 className="hero-headline text-sm text-black">
-          Your Documents &amp; Compliance Vault <span className="text-gray-400 font-normal">({MOCK_DOCS.length} files)</span>
-        </h2>
-        <button className="px-4 py-2 rounded-full bg-black text-white hover:bg-gray-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer">
-          <Upload className="w-3.5 h-3.5" /> Upload File
-        </button>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {MOCK_DOCS.map((doc, i) => (
-          <motion.div
-            key={doc.name}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.04 }}
-            className="bg-white border border-gray-200 rounded-2xl p-4 flex flex-col gap-3 group hover:border-gray-400 transition-all shadow-xs"
-          >
-            <div className="w-10 h-10 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center text-black">
-              {doc.type === 'pdf' ? <FileText className="w-5 h-5 text-black" /> : <FileImage className="w-5 h-5 text-black" />}
-            </div>
-            <div className="flex-1">
-              <p className="text-xs font-semibold text-black truncate">{doc.name}</p>
-              <p className="text-[11px] text-gray-400 mt-0.5 font-google">{doc.date} · {doc.size}</p>
-            </div>
-            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button className="p-1.5 rounded-lg text-gray-600 hover:text-black hover:bg-gray-100 text-xs flex-1 justify-center flex cursor-pointer">
-                <Eye className="w-3.5 h-3.5" />
-              </button>
-              <button className="p-1.5 rounded-lg text-gray-600 hover:text-black hover:bg-gray-100 text-xs flex-1 justify-center flex cursor-pointer">
-                <Download className="w-3.5 h-3.5" />
-              </button>
-              <button className="p-1.5 rounded-lg text-red-500 hover:text-red-700 hover:bg-red-50 text-xs flex-1 justify-center flex cursor-pointer">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </motion.div>
-        ))}
-      </div>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+      className="bg-white border border-gray-200 rounded-2xl p-10 text-center max-w-2xl shadow-xs">
+      <FolderOpen className="w-8 h-8 text-gray-300 mx-auto" />
+      <p className="text-sm font-semibold text-black mt-3">No documents yet</p>
+      <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
+        Document storage isn't connected yet. To pull data out of a filing document, scan it and the extracted values go straight into the form.
+      </p>
+      <button onClick={() => navigate('/dashboard/user/scanner')}
+        className="mt-4 px-5 py-2.5 rounded-full bg-black text-white hover:bg-gray-800 text-xs font-semibold inline-flex items-center gap-2 cursor-pointer">
+        <ScanLine className="w-4 h-4" /> Scan a document
+      </button>
     </motion.div>
   );
 }
@@ -542,6 +366,7 @@ export default function UserDashboard() {
           <Route path="forms" element={<McaFormsHub />} />
           <Route path="scanner" element={<AiScanner />} />
           <Route path="vault" element={<DocumentVault />} />
+          <Route path="extension" element={<ExtensionSetup />} />
           <Route path="support" element={<AiSupportChat />} />
         </Routes>
 

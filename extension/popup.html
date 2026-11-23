@@ -55,6 +55,32 @@
         </div>
       </div>
 
+      <!-- Field fix panel (shown when MCA rejects data — user fixes inline and continues) -->
+      <div id="fixPanel" class="fix-panel hidden">
+        <div class="fix-header">
+          <span class="fix-ico has-ico i-edit" aria-hidden="true"></span>
+          <span class="fix-title">Fix required</span>
+          <button class="fix-close has-ico i-x" id="fixClose" aria-label="Dismiss"></button>
+        </div>
+        <p class="fix-explain" id="fixExplain">MCA needs corrections before saving.</p>
+        <div class="fix-fields" id="fixFields"></div>
+        <div class="fix-actions">
+          <button id="fixApply" class="primary small">Fix & Continue</button>
+          <button id="fixSkip" class="small">Skip this phase</button>
+        </div>
+      </div>
+
+      <!-- Jobs pushed from the dashboard scanner (backend queue) -->
+      <section class="card jobs-card" id="jobsCard">
+        <div class="jobs-head">
+          <span class="jobs-title">Jobs from dashboard</span>
+          <span class="jobs-count hidden" id="jobsCount"></span>
+          <span class="jobs-status" id="jobsStatus" title="Local backend http://localhost:4000"></span>
+        </div>
+        <ul class="jobs-list" id="jobsList"></ul>
+        <small class="hint" id="jobsEmpty">No jobs waiting. Scan and review a document in the dashboard, then click Push to Extension.</small>
+      </section>
+
       <!-- Form + client selection -->
       <section class="card selector-card">
         <div class="field">
@@ -404,6 +430,7 @@
   <script src="js/srn-cleanup.js"></script>
   <script src="js/ui/toasts.js"></script>
   <script src="js/ui/timeline.js"></script>
+  <script src="js/job-sync.js"></script>
   <script src="js/ui/error-panel.js"></script>
   <script src="js/ui/data-card.js"></script>
   <script src="js/ui/form-picker.js"></script>

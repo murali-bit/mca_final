@@ -10,6 +10,8 @@ import {
   filesureDirectorResolve,
   filesureDirector,
   claudeExtractAdt1,
+  extractForForm,
+  extractVision,
   createRazorpayOrder,
   verifyRazorpaySignature,
   GATEWAY_CONFIG
@@ -33,7 +35,7 @@ function parseJsonBody(req) {
     let body = '';
     req.on('data', chunk => {
       body += chunk;
-      if (body.length > 2 * 1024 * 1024) {
+      if (body.length > 20 * 1024 * 1024) {
         reject(new Error('Payload too large'));
         req.destroy();
       }
@@ -570,12 +572,27 @@ const server = http.createServer(async (req, res) => {
     // Gateway: Claude AI OCR & Document Extraction (ADT-1)
     // -------------------------------------------------------------
     if (pathname === '/api/gateway/claude/extract' && method === 'POST') {
-      const { text } = await parseJsonBody(req);
+      const { text, formType } = await parseJsonBody(req);
       if (!text) {
         return sendJson(res, 400, { ok: false, message: 'Document text is required for AI extraction' });
       }
-      console.log(`\x1b[35m[CLAUDE GATEWAY]\x1b[0m Extracting ADT-1 fields from document (${text.length} chars)`);
-      const result = await claudeExtractAdt1(text);
+      const form = formType || 'ADT-1';
+      console.log(`\x1b[35m[CLAUDE GATEWAY]\x1b[0m Extracting ${form} fields from document (${text.length} chars)`);
+      const result = await extractForForm(text, form);
+      return sendJson(res, 200, result);
+    }
+
+    // Claude Vision: Extract from PDF/image file (base64)
+    if (pathname === '/api/gateway/claude/vision' && method === 'POST') {
+      const { fileBase64, mimeType, formType } = await parseJsonBody(req);
+      if (!fileBase64) {
+        return sendJson(res, 400, { ok: false, message: 'fileBase64 is required' });
+      }
+      const form = formType || 'ADT-1';
+      const mime = mimeType || 'application/pdf';
+      const sizeKB = Math.round((fileBase64.length * 3) / 4 / 1024);
+      console.log(`\x1b[35m[CLAUDE VISION]\x1b[0m Extracting ${form} fields from ${mime} (${sizeKB} KB)`);
+      const result = await extractVision(fileBase64, mime, form);
       return sendJson(res, 200, result);
     }
 
@@ -651,6 +668,65 @@ const server = http.createServer(async (req, res) => {
         method: check.method,
         draftStatus: 'paid'
       });
+    }
+
+    // -------------------------------------------------------------
+    // Extension: Push job from dashboard
+    // -------------------------------------------------------------
+    if (pathname === '/api/extension/push' && method === 'POST') {
+      const { formType, clientId, clientName, payload } = await parseJsonBody(req);
+      if (!formType || !payload) return sendJson(res, 400, { ok: false, message: 'formType and payload are required' });
+      const id = 'job_' + crypto.randomUUID().slice(0, 12);
+      db.prepare(`INSERT INTO extension_jobs (id, form_type, client_id, client_name, payload, status) VALUES (?, ?, ?, ?, ?, 'ready')`)
+        .run(id, formType, clientId || '', clientName || '', typeof payload === 'string' ? payload : JSON.stringify(payload));
+      console.log(`\x1b[33m[EXTENSION]\x1b[0m Job pushed: ${id} (${formType} / ${clientName || clientId})`);
+      return sendJson(res, 200, { ok: true, jobId: id });
+    }
+
+    // -------------------------------------------------------------
+    // Extension: Poll for pending jobs
+    // -------------------------------------------------------------
+    if (pathname === '/api/extension/jobs' && method === 'GET') {
+      // Dashboard view: latest jobs of any status, without the (large) payloads.
+      if (url.searchParams.get('scope') === 'recent') {
+        const recent = db.prepare(`SELECT id, form_type, client_id, client_name, status, phase, result, created_at, updated_at
+          FROM extension_jobs ORDER BY created_at DESC LIMIT 20`).all();
+        const parse = s => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
+        return sendJson(res, 200, { ok: true, jobs: recent.map(r => ({ ...r, result: parse(r.result) })) });
+      }
+      const rows = db.prepare(`SELECT * FROM extension_jobs WHERE status IN ('ready', 'started') ORDER BY created_at DESC`).all();
+      const jobs = rows.map(r => ({ ...r, payload: JSON.parse(r.payload || '{}') }));
+      return sendJson(res, 200, { ok: true, jobs });
+    }
+
+    // -------------------------------------------------------------
+    // Extension: Get specific job
+    // -------------------------------------------------------------
+    if (pathname.startsWith('/api/extension/jobs/') && method === 'GET') {
+      const jobId = pathname.split('/').pop();
+      const row = db.prepare(`SELECT * FROM extension_jobs WHERE id = ?`).get(jobId);
+      if (!row) return sendJson(res, 404, { ok: false, message: 'Job not found' });
+      let result = null;
+      try { result = row.result ? JSON.parse(row.result) : null; } catch { result = row.result; }
+      return sendJson(res, 200, { ok: true, job: { ...row, payload: JSON.parse(row.payload || '{}'), result } });
+    }
+
+    // -------------------------------------------------------------
+    // Extension: Update job status
+    // -------------------------------------------------------------
+    if (pathname.startsWith('/api/extension/jobs/') && method === 'PUT') {
+      const jobId = pathname.split('/').pop();
+      const { status, phase, result } = await parseJsonBody(req);
+      const row = db.prepare(`SELECT id FROM extension_jobs WHERE id = ?`).get(jobId);
+      if (!row) return sendJson(res, 404, { ok: false, message: 'Job not found' });
+      const sets = ['updated_at = CURRENT_TIMESTAMP'];
+      const vals = [];
+      if (status) { sets.push('status = ?'); vals.push(status); }
+      if (phase != null) { sets.push('phase = ?'); vals.push(phase); }
+      if (result) { sets.push('result = ?'); vals.push(typeof result === 'string' ? result : JSON.stringify(result)); }
+      vals.push(jobId);
+      db.prepare(`UPDATE extension_jobs SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+      return sendJson(res, 200, { ok: true, jobId });
     }
 
     // 404 Fallback

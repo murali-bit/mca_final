@@ -152,16 +152,70 @@ async function doFill() {
         for (let i = unsaved.length - 1; i >= 0; i--) if (unsaved[i].phase.saveIndex === p.saveIndex) unsaved.splice(i, 1);
       } else if (!save.clicked) {
         const reason = describeUnsaved(save);
-        // Validation errors mean MCA rejected the data in this section — it will NOT unlock
-        // the next section until these are fixed. Stop here so the user can correct them.
+        // Validation errors mean MCA rejected the data — show the fix panel so the user can
+        // correct values and continue, instead of stopping the entire run.
         if (save.validationErrors?.length) {
-          tl('setError', step, { title: `${p.label.split(' — ')[0]}: fix validation errors, then Save` });
+          tl('setError', step, { title: `${p.label.split(' — ')[0]}: fix validation errors` });
           document.getElementById('phaseSelect').value = String(pId);
-          const nextPId = pId + 1;
-          const resumeHint = nextPId <= 7 ? ` After saving, select Phase ${nextPId} and click Fill Form to continue.` : '';
-          showMessage('warning', `${p.label} has validation errors — ${reason}. Fix the highlighted fields on the MCA page and click Save.${resumeHint}`, 60000);
-          await Storage.saveLogs({ action: 'fill', phase: pId, error: 'validation errors stopped fill', details: save.validationErrors, unsaved: unsaved.map(u => `${u.phase.id}: ${u.reason}`) });
-          return;
+          await Storage.saveLogs({ action: 'fill', phase: pId, error: 'validation errors — waiting for fix', details: save.validationErrors });
+
+          // Dispatch to fix panel and wait for user response
+          if (window.FixPanel) {
+            showMessage('warning', `${p.label} has validation errors. Fix the values in the panel below.`, 120000);
+            const fixResult = await window.FixPanel.show({
+              validationErrors: save.validationErrors,
+              phaseId: pId,
+              tabId: lastTabId,
+            });
+            if (fixResult && fixResult.action === 'fix' && Object.keys(fixResult.values).length) {
+              // Re-fill corrected values on the MCA page
+              showMessage('info', 'Applying corrections…', 15000);
+              try {
+                await chrome.scripting.executeScript({
+                  target: { tabId: lastTabId, allFrames: true }, world: 'MAIN',
+                  func: (corrections) => {
+                    for (const [label, value] of Object.entries(corrections)) {
+                      const inputs = document.querySelectorAll('input, select, textarea');
+                      for (const el of inputs) {
+                        const elLabel = (el.getAttribute('aria-label') || el.name || el.placeholder || '').toLowerCase().replace(/\s+/g, '_');
+                        if (elLabel.includes(label) || label.includes(elLabel)) {
+                          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+                                      || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+                          if (setter) setter.call(el, value);
+                          el.dispatchEvent(new Event('input', { bubbles: true }));
+                          el.dispatchEvent(new Event('change', { bubbles: true }));
+                          el.dispatchEvent(new Event('blur', { bubbles: true }));
+                          break;
+                        }
+                      }
+                    }
+                  },
+                  args: [fixResult.values],
+                });
+                showMessage('info', 'Corrections applied. Retrying Save…', 10000);
+                // Retry the same phase: decrement so the for-loop's pId++ brings us back here
+                pId--;
+                continue;
+              } catch (fixErr) {
+                showMessage('error', `Could not apply fix: ${fixErr.message}`, 15000);
+              }
+            } else if (fixResult && fixResult.action === 'skip') {
+              showMessage('info', `Skipped fixing ${p.label}. Continuing with next phase.`, 10000);
+              unsaved.push({ phase: p, reason: 'skipped by user after validation error' });
+            } else {
+              // Dismissed — stop like before
+              const nextPId = pId + 1;
+              const resumeHint = nextPId <= 7 ? ` After fixing, select Phase ${nextPId} and click Fill Form to continue.` : '';
+              showMessage('warning', `${p.label} has validation errors — ${reason}. Fix the fields on the MCA page and click Save.${resumeHint}`, 60000);
+              return;
+            }
+          } else {
+            // No fix panel available — fall back to old behavior
+            const nextPId = pId + 1;
+            const resumeHint = nextPId <= 7 ? ` After saving, select Phase ${nextPId} and click Fill Form to continue.` : '';
+            showMessage('warning', `${p.label} has validation errors — ${reason}. Fix the highlighted fields on the MCA page and click Save.${resumeHint}`, 60000);
+            return;
+          }
         }
         // Other save failures (blocked by other sections, timeout, etc.) — keep filling the rest
         // of the form and retry at the end, so one bad field never leaves remaining sections empty.
